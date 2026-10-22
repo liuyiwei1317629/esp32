@@ -303,6 +303,11 @@ class TimerTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(parse_command(text))
 
+    def test_timer_rejects_negated_call_me(self):
+        for text in ["五分钟后别叫我", "五分钟后不要叫我", "五分钟后不用叫我"]:
+            with self.subTest(text=text):
+                self.assertIsNone(parse_command(text))
+
     def test_timer_rejects_cancel(self):
         for text in ["取消计时", "取消三分钟计时", "取消闹钟", "取消提醒"]:
             with self.subTest(text=text):

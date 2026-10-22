@@ -1,0 +1,31 @@
+name: hermetic
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip requests
+      - name: Unit tests (explicit list)
+        working-directory: bridge
+        run: |
+          python -m unittest \
+            test_memory_session test_memory_store test_memory_extract test_memory_score \
+            test_memory_context test_memory_maintenance test_memory_admin \
+            test_memory_writer test_memory_integration \
+            test_brains test_brain_stream test_server_brain test_usage test_server_usage \
+            test_context_builder test_commands test_local_commands
+      - name: Script self-tests
+        run: |
+          python bridge/test_sentence_split.py
+          python bridge/test_llm.py
+          python bridge/test_pipeline.py

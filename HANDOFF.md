@@ -18,7 +18,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | 五层记忆阶段 2（只读接入） | 已完成、已验收（集成 16 例）；默认关闭，不写盘 |
 | 五层记忆阶段 3（写路径 dry-run） | 已完成、已验收；阶段 3 当时 writer 18 例、记忆 185 例；默认 `MEMORY_DRY_RUN=1`，不落盘 |
 | 五层记忆阶段 4（维护 / 可观测性 / 退出补刷） | **代码已完成并验收（2026-10-23）**；默认仍 dry-run，真实 `~/.voice-ai/memory/` 写入待用户确认 |
-| C 规则命令 | 已交付（53 例），**未接入**主链路 |
+| C 规则命令 | **已接入（2026-10-23）**；stop/time/timer 本地短路，不调用 LLM；timer 只说明无法到点提醒 |
 | B 上下文模块 | 已交付（63 例），**未接入**；语音链路使用 `memory_context.py`，不要重复接两套 |
 | F 固件 | 三模式编译通过，**未上机** |
 | G 硬件 | 截至本文写作**未收到到货确认**；模块预计 2026-10-23、电源线预计 2026-10-25 |
@@ -55,8 +55,8 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
   - 退出补刷：`serve()` 在 `finally` 调 `writer.stop()` 并 `server_close()`（Ctrl+C 也走）；`run_local`/`record_mic` 入队后停止 writer，真实模式会补刷命中。
   - 测试证据：writer **25/25**、集成 **22/22**、记忆 **195 例**；hermetic 20 模块 **350 例**；脚本 22/22。临时目录 3 回合真实写入生成 facts/episodes/sessions/state，`written_jobs=3`、`maintenance_runs=1`、`turns_since_maintenance=3`，真实目录仍不存在。
   - 未做：真实目录启用（待确认 + 备份）、`memory_debug.jsonl`、`MEMORY_LLM`/`memory_usage.jsonl`、p95 自动回归门。
-- **五层记忆阶段 5 已完成（2026-10-23，读路径与缓存上限）**：`active_facts()`/`active_episodes()` 改为只读投影（只复制顶层字段，调用方不得修改嵌套 `history`），`facts()`/`episodes()` 仍深拷贝供维护/管理；`MemoryStore(max_sessions=64)`、`RecentCache(max_sessions=64)`、`MemoryWriter(seen_gen_limit=8192)` 加界（LRU/FIFO）。本机 500 条复测 `active_episodes` p50 3.90→0.10 ms、`build_for_turn` p50 5.72→1.93 ms / p95 6.22→2.06 ms。记忆 **200 例**、hermetic **355 例**、脚本 22/22。未改 `config.py`/`server.py`/`pipeline.py`/`memory_context.py`/固件，默认开关未动，真实目录仍未创建。
-- **B/C 已交付纯模块，但尚未集成**：`bridge/context_builder.py`（63 例）与 `bridge/commands.py`（53 例）单测全过（仅标准库、不联网、不占 GPU）。`pipeline.py` 没有使用 `context_builder`；`server.py` 没有调用 `parse_command`。**语音链路已经由 `memory_context.py` 提供五层记忆，B 不再作为主路径；不要为了“接 B”再改一次消息组装。**
+- **五层记忆阶段 5 已完成（2026-10-23，读路径与缓存上限）**：`active_facts()`/`active_episodes()` 改为只读投影（只复制顶层字段，调用方不得修改嵌套 `history`），`facts()`/`episodes()` 仍深拷贝供维护/管理；`MemoryStore(max_sessions=64)`、`RecentCache(max_sessions=64)`、`MemoryWriter(seen_gen_limit=8192)` 加界（LRU/FIFO）。本机 500 条复测 `active_episodes` p50 3.90→0.10 ms、`build_for_turn` p50 5.72→1.93 ms / p95 6.22→2.06 ms。阶段 5 当时记忆 **200 例**、hermetic **355 例**、脚本 22/22；C 接入后的当前计数见下一条测试环境。未改 `config.py`/`server.py`/`pipeline.py`/`memory_context.py`/固件，默认开关未动，真实目录仍未创建。
+- **C 已接入，B 保持归档**：`bridge/commands.py`（54 例）+ `bridge/local_commands.py`（13 例）已接入 `pipeline.Turn`；`turn.local_command` 非空时跳过 LLM、记忆读写与用量账本。`context_builder.py`（63 例）仍不接入，语音链路使用 `memory_context.py`，不要为了“接 B”再改一次消息组装。
 - **F 已静态交付并完成编译验证（2026-10-22）**：`firmware/voice_terminal/` 7 个源码/配置 + `firmware/README.md` + `.gitignore`。引脚 4/5/6/15/16/7/0；WAV 44 字节头与 `Content-Length=44+pcm`；`X-Voice: s16le/16000/mono`、chunked/204/401、`/stop` 与 bridge 契约一致；默认两路独立 I2S，24-bit 方案 B 会打印 raw/s16 min/max/RMS。
   - 三模式编译通过（arduino-cli 1.5.1 + `esp32:esp32@3.3.12`，FQBN `esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=default,CDCOnBoot=default`）：
     - RECORD_ONLY：377,943 B（28% flash）/ 29,636 B（9% RAM）
@@ -64,7 +64,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
     - TURN_STOP：935,838 B（71%）/ 48,756 B（14%）
   - `--warnings all` 下自有文件 0 warning；`compile_commands.json` 确认 `-DAPP_MODE=1/2` 生效。**编译通过不等于能跑**：未烧录、未接话筒/功放。
   - 2026-10-22 复审后修了 6 处：`s_waitRelease` 重复触发、播放排空 abort 卡死、`/stop` 先本地 flush、排空阶段可打断、上传提前响应/超时、`MIC_AMP_SHARED_CLOCKS=1` 编译守卫。单总线路径仍未实现，只是被禁止。
-- **测试环境口径**：脚本自检 22/22（sentence_split 8、llm 9、pipeline 5）。**单元回归必须用显式模块清单**：20 个模块（排除 `test_e2e.py`、`test_live.py`）共 **355 例全过**，其中记忆 200 例。`test_e2e.py` 与 `test_live.py` 是脚本式测试，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这两个脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
+- **测试环境口径**：脚本自检 23/23（sentence_split 8、llm 9、pipeline 6）。**单元回归必须用显式模块清单**：17 个 unittest 模块共 **371 例全过**，其中记忆 202 例；加上 3 个脚本自检，hermetic 合计 **20 个测试文件、394 例**。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
 - 性能基线（以 `bridge/README.md` 实测节为准）：首字节常见 2.4–5.3 s；首句 6–8 字；CosyVoice 快态 125–215 ms/字，慢态可到 300–558 ms/字，重启后恢复；DeepSeek TTFT 0.1–1.0 s；ASR 在 CPU 上约 0.2–0.5 s。
 - `~/.deepseek/key` 与 `~/.deepseek/bridge_token` 已配置；只能确认存在，不要读取或打印内容。
 - 根 `README.md` 与 `bridge/README.md` 的「云端为主 + 本地功能插件」节已同步；记忆与固件的最终口径以本文和 `bridge/README.md` 记忆节为准。
@@ -88,11 +88,13 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - 剩余动作：备份 `~/.voice-ai/memory/` 后设 `MEMORY_DRY_RUN=0`，先在临时目录外做一次真实启动检查，再切到真实目录；**需用户确认**，不允许跳过 dry-run。
 - 记忆目前仍是“只读种子库 + 进程内最近两轮”，不是可用的长期记忆。**这是当前软件侧最大的功能缺口。**
 
-**P1 · 规则命令接入（C）**
+**规则命令（C，已完成）**
 
-- `commands.py` 已交付但 `server.py` 未调用；`stop`/`time`/`timer` 都还没有执行语义。
-- 定时提醒无法主动出声：现有 HTTP 是请求/响应，回合外没有通道。不要用睡眠线程直接调 TTS 糊过去。
-- 已知误判：`五分钟后别叫我` 会解析成 `timer(300, label="别")`；`别叫我` 本身返回 `None`。接入前先在否定模式补 `(?:别|不要|不用)叫我` 并加回归。
+- `pipeline.Turn` 在调用 LLM 前先跑 `parse_command`；命中后由 `local_commands.reply_for` 生成本地文本，直接进入原有句子切分/TTS/流式播放，不调用云端。
+- `stop` → `好。`；`time` → 本地时间（上午/下午/晚上 + 中文数字）；`timer` → 确认时长/标签，并明确“现在还不能到点主动出声”。
+- 本地命令回合 `turn.local_command` 非空：`server.enqueue_memory` 跳过 writer，不写记忆、不进 `recent_cache`、不写用量账本。
+- 定时提醒仍受请求/响应契约限制，没有线程/定时器；要真正到点提醒需设备端长轮询/WebSocket 或本地蜂鸣器。
+- 已修 `五分钟后别叫我` 误判：否定模式补 `(?:别|不要|不用)叫我`，回归在 `test_commands`。
 
 **P1 · 运维与成本**
 
@@ -183,7 +185,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | 起始水位 | 设备端先缓冲 150–200 ms PCM 再开 I2S，避免 underrun（固件当前 160 ms） |
 | 打断语义 | 设备收到 `/stop` 或本地按键后**本地 flush**；服务端可能还在等当前句合成完，连接晚关几秒不是可听延迟 |
 | 切脑 | 一旦向 TTS 送出内容，不在回复中途切换；下一轮再切 |
-| 记忆 | 不新增端点/字段；阶段 2 只读；当前响应头 `X-Session-Id` 仍是 `d=dev1`，待 bb96 决定是否修 |
+| 记忆 | 不新增端点/字段；写路径默认 dry-run；当前响应头 `X-Session-Id` 仍是 `d=dev1`，待 bb96 决定是否修 |
 
 `/turn` 的处理顺序是：读 WAV → SenseVoice → 云端 LLM 流式 → 切句 → TTS → chunked PCM。云端 TTFT 不是主要瓶颈，首句字数 × 合成速度才是。
 
@@ -207,7 +209,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | F 包 | 新建 `firmware/**` | `bridge/**` 与其他已有文件 |
 | G 包 | 只读、测量、报告；日志放对话里 | 不改代码、不改防火墙、不采购 |
 
-**注意**：上表只是分工，不是改码许可。A/D 与记忆阶段 1/2/3/4 代码已获用户明确授权并完成；C 集成、E 仍需先后授权与范围确认。记忆阶段 4 的真实目录启用（备份 + `MEMORY_DRY_RUN=0`）仍需用户单独确认。
+**注意**：上表只是分工，不是改码许可。A/D、记忆阶段 1–5、C 集成已获用户明确授权并完成；E 仍需 GPU 授权与范围确认。记忆阶段 4 的真实目录启用（备份 + `MEMORY_DRY_RUN=0`）仍需用户单独确认。
 
 `bridge/out/` 里有真人录音和合成音频，属于个人数据；不要上传、不要贴进公开仓库。
 
@@ -218,7 +220,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 3. **记忆阶段 1（已完成 2026-10-23）**：六个纯模块 + 148 例。
 4. **记忆阶段 2（已完成 2026-10-23）**：只读接入 + 16 例；默认关闭。
 5. **硬件 bring-up（与 6 可并行）**：按 G 手册；这是唯一能证明设备可用的路径。
-6. **C 集成（需授权）**：先修否定误判，再决定 `stop`/`time` 的执行语义；`timer` 不能假装会主动提醒。
+6. **C 集成（已完成 2026-10-23）**：先修否定误判，再定 `stop`/`time`/`timer` 的本地执行语义；`timer` 只确认、不假装会主动提醒。
 7. **记忆阶段 3（已完成 2026-10-23）**：`memory_writer.py` + 不可变 `WriteJob` + `recent_cache` + 敏感预检 + dry-run + `mark_used` 批量刷；默认不落盘。
 8. **记忆阶段 4（代码已完成 2026-10-23）**：维护接线、读路径 debug、退出补刷；临时目录真实写入验收。真实目录启用需备份 + 用户确认后再设 `MEMORY_DRY_RUN=0`。
 9. **E（需 GPU 授权）**：LLM 等待窗口预热 CosyVoice；不与任何 GPU 任务并行。
@@ -252,7 +254,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | 包 | 主写 | 复核 | 说明 |
 |---|---|---|---|
 | B 上下文/记忆 | Qwen3.8-Flash 思考中（0.65x） | DeepSeek V4.1 Flash max（夜间 0.11x） | 已交付 63 例；未接入，作为归档 |
-| C 规则命令 | DeepSeek V4.1 Flash max | 单测裁决 | 已交付 53 例；未接入 |
+| C 规则命令 | DeepSeek V4.1 Flash max | 单测裁决 | 已交付 54 例 + 本地回复 13 例；**2026-10-23 已接入** |
 | F 固件骨架 | Qwen3.8-Flash 极致（1.20x） | DeepSeek V4.1 Flash max | 已交付并三模式编译；待上机 |
 | G 硬件调试 | Qwen3.8-Flash 思考中，且必须能读图 | 用户照片 + 本会话复核 | 使用 `handoff/G-hardware-bringup.md` |
 
@@ -298,17 +300,22 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - 写入入口是 `server.enqueue_memory(bridge, turn)`：`/turn` 在 PCM 循环后、终块前调用；`run_local`/`record_mic` 在 PCM 循环后调用，随后 `stop_memory(bridge)` 补刷。任何异常只打印 WARN。
 - 真实写入（`MEMORY_DRY_RUN=0` 且 store 非只读）才启用维护与命中落盘；`serve()` 退出时 `writer.stop()` + `server_close()`。**不要跳过 dry-run；真实目录启用前先备份并取得用户确认。**
 
-### C · 规则命令（已交付，未接入）
+### C · 规则命令（已接入 2026-10-23）
 
 ```python
 from commands import parse_command
+from local_commands import reply_for
+
 cmd = parse_command(text)   # -> Command | None
+reply = reply_for(cmd)      # -> str | None；只生成文本
 ```
 
 - `Command.kind` 只允许 `"stop"`、`"time"`、`"timer"`。
-- C 只解析，不执行、不起线程、不做 TTS。
-- **定时提醒的限制**：当前 HTTP 契约是请求/响应，回合外无法主动出声。C 可以解析 `timer`，但集成层不能假装到点会响；要真正提醒，需要设备端增加长轮询/WebSocket，或本地蜂鸣器。
-- 已知否定误判先修再接入：`五分钟后别叫我` → `timer(300, label="别")`。
+- `pipeline.Turn._handle_local_command()` 在组装消息、调用 LLM 之前短路；命中后文本仍走原有切句/TTS/流式播放，`turn.local_command` 记录 kind。
+- `local_commands.reply_for` 不联网、不读写记忆、不起线程、不调用 TTS。`stop` → `好。`；`time` → 本机时间（上午/下午/晚上 + 中文数字）；`timer` → 确认时长/标签。
+- `server.enqueue_memory` 对 `local_command` 非空回合直接跳过：不写记忆、不进 `recent_cache`、不写用量账本。
+- **定时提醒的限制**：当前 HTTP 契约是请求/响应，回合外无法主动出声。`timer` 只回复「我知道你想在 X 后提醒你……但现在还不能到点主动出声」；要真正提醒，需要设备端增加长轮询/WebSocket，或本地蜂鸣器。不要用睡眠线程直接调 TTS 绕开设备播放路径。
+- 已知否定误判已修：`五分钟后别叫我` 不再解析成 timer，回归在 `test_commands`。
 
 ### B · 上下文（已交付，归档）
 
@@ -325,7 +332,7 @@ cmd = parse_command(text)   # -> Command | None
 在 `C:\Users\DELL\voice-ai` 下执行。
 
 ```bash
-# 1) 记忆全部单测（阶段 1 + 阶段 2），无网络、无 GPU
+# 1) 记忆全部单测（阶段 1–5 + 本地命令记忆跳过契约），无网络、无 GPU
 cd bridge
 ../.venv/Scripts/python.exe -m unittest -v \
   test_memory_session test_memory_store test_memory_extract test_memory_score \
@@ -341,7 +348,7 @@ cd ..
 # 3) 现有 unittest（A/D/B/C；无网络、无 GPU）
 cd bridge
 ../.venv/Scripts/python.exe -m unittest -v test_brains test_brain_stream test_server_brain test_usage test_server_usage
-../.venv/Scripts/python.exe -m unittest -v test_context_builder test_commands
+../.venv/Scripts/python.exe -m unittest -v test_context_builder test_commands test_local_commands
 cd ..
 ```
 
@@ -375,8 +382,8 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml com
 
 1. **硬件未确认到货、固件未上机**：从未烧录、未接话筒/功放；硬件行为（PSRAM、I2S、24-bit 格式、供电）均未验证。不要把「编译通过」说成「能跑」。
 2. **记忆真实写入未打开**：阶段 3/4 默认 dry-run，不写记录、不调 `mark_used`、不维护。`hits` 停在种子值，晋升/降级/容量都不会发生；`recent_cache` 只在单进程内影响下一轮。当前不是可用的长期记忆，真实目录启用后才能真实积累。
-3. **定时提醒无法主动出声**：现有 HTTP 是单向请求/响应；C 只解析，执行需要新通道。不要用睡眠线程 + 直接调用 TTS 糊过去，那会绕开设备播放路径。
-4. **C 未接入且有一处否定误判**：`五分钟后别叫我` 会误判；接入前先修。
+3. **定时提醒无法主动出声**：现有 HTTP 是单向请求/响应；C 已能解析并本地回复，但到点主动出声还需要新通道。不要用睡眠线程 + 直接调用 TTS 糊过去，那会绕开设备播放路径。
+4. **本地命令覆盖有限**：只识别 stop/time/timer；`time` 依赖 PC 本地时钟；`timer` 只确认、不到点响（原因见第 3 条）。
 5. **B 与 memory_context 重复**：B 的 `context_builder` 未接入，语音链路用 `memory_context`；不要同时接两套。
 6. **测试环境分裂**：系统 Python 缺 `funasr`，`test_e2e`/`test_live` 导入失败；用 `.venv` 跑 ASR/e2e，不要把环境问题当回归。
 7. **24-bit 话筒格式未实测**：ICS43434 是 24-bit；固件假设左对齐、`MIC_SHIFT=16`，由 G 实测决定移位/位宽。不要静默猜一个移位。
@@ -388,7 +395,7 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml com
 13. **首字节 2.4–5.3 s**：距 1.5–2 s 目标有差距；E 未做，首句字数和 TTS 速度是主因。
 14. **没有本地对话脑**：PC 关机/断网/云端不可用即无法对话；本地插件模型未下载。
 15. **记忆明文与个人音频**：`~/.voice-ai/memory/` 是明文短句；`bridge/out/`、`test-data/` 有真人录音。不要上传、不要贴公开仓库。
-16. **没有干净 git 基线**：`voice-ai` 里大量文件未跟踪；不要擅自 `git add -A` 或提交。需要版本化时先与用户确认 `.gitignore` 与提交范围。
+16. **git 基线已建立**：源码/文档/测试已入库并推送（`5d7c279` 起）；`.gitignore` 已排除运行时、模型、音频、日志与 `secrets.h`。后续提交仍要逐项暂存，不要 `git add -A`。
 
 ## 11. 环境与路径
 
@@ -461,8 +468,9 @@ C:\Users\DELL\voice-ai\
     memory_store.py  memory_score.py  memory_extract.py
     memory_context.py  memory_maintenance.py  memory_admin.py
     memory_writer.py                 ← 阶段 3 异步写作 + 阶段 4 维护/退出补刷（默认 dry-run）
-    context_builder.py  commands.py  ← 已交付未接入（B/C）
-    test_*.py                        ← 22 个测试文件 = 20 个 hermetic 模块 + 2 个实跑脚本
+    context_builder.py               ← B 归档，未接入
+    commands.py  local_commands.py   ← C 已接入：解析 + 本地回复文本
+    test_*.py                        ← 23 个 = 20 个 hermetic（17 unittest + 3 脚本自检）+ 3 个实跑脚本
     bench_memory_score.py            ← L3 基准
   firmware\
     README.md
@@ -534,11 +542,11 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 
 ### 14.3 测试门
 
-- 任何记忆改动：记忆 **200 例**（148 模块 + 22 集成 + 25 writer + 5 读路径/上限）全过；再跑旧脚本 22 例。读路径硬门是 **p95 ≤20 ms**（500 episodes + 500 字 + 预热 token cache）；阶段 5 实测 p50 1.93 ms / p95 2.06 ms。
-- 任何 bridge 改动：显式清单 20 个模块 **355 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`）。
+- 任何记忆改动：记忆 **202 例**（151 纯模块 + 27 writer + 24 集成）全过；再跑脚本 23 例。读路径硬门是 **p95 ≤20 ms**（500 episodes + 500 字 + 预热 token cache）；阶段 5 实测 p50 1.93 ms / p95 2.06 ms。
+- 任何 bridge 改动：显式清单 17 个 unittest 模块 **371 例** + 3 个脚本自检 **23 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`/`test_edge_content.py`）。
 - 任何固件改动：三模式重编译，0 error；上机按 G 检查点复测。
 - 不把 `funasr` 环境错误当回归；不顺手跑 `test_e2e.py`、`test_live.py` / `throttle_probe.py`。
-- 提交前看 `git status`；当前没有干净基线，不要 `git add -A`。
+- 提交前看 `git status`；只暂存源码/文档/测试，生成物与个人数据由 `.gitignore` 排除，不要 `git add -A`。
 
 ### 14.4 常见扩展点
 
@@ -556,7 +564,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 
 ### 14.5 版本与备份
 
-- 当前 `voice-ai` 不是干净 git 基线；所有文件多为未跟踪。需要版本化时先与用户确认：只跟踪源码/文档/测试，排除 `.venv`、`py311`、`models`、`CosyVoice`、`bridge/out`、`bridge/logs`、`test-data`、`*.log`、安装包。
+- 已有 git 基线：`5d7c279` 起源码/文档/测试入库并推送到 `origin/main`；`.gitignore` 排除 `.venv`、`py311`、`models`、`CosyVoice`、`bridge/out`、`bridge/logs`、`test-data` 生成物、`*.log`、安装包与 `secrets.h`。新生成物若未被忽略，先补 `.gitignore` 再提交。
 - 记忆目录、账本、密钥不进入 git。
 - 升级前备份 `~/.voice-ai/brains.toml`、`~/.voice-ai/memory/`、`~/.voice-ai/usage.jsonl`（如存在）。
 

@@ -1,0 +1,13 @@
+# 真实密钥文件，绝不提交
+voice_terminal/secrets.h
+
+# Arduino / 构建产物
+build/
+*.bin
+*.elf
+*.map
+*.partitions.bin
+
+# 系统杂项
+.DS_Store
+Thumbs.db

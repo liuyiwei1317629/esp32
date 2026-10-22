@@ -53,6 +53,8 @@ def report(timers, turn, text=None):
     print("=== turn gen=%s ===" % turn.gen)
     if text:
         print("  user: %s" % text)
+    if getattr(turn, "local_command", ""):
+        print("  local_command=%s" % turn.local_command)
     if turn.error:
         print("  ERROR %s" % turn.error)
     for key, label in (("asr", "ASR完成"), ("first_token", "LLM首字"),
@@ -114,6 +116,9 @@ def enqueue_memory(bridge, turn):
     """终块发送前入队一份不可变快照；任何异常都不影响回复。"""
     writer = getattr(bridge, "memory_writer", None)
     if writer is None or not getattr(turn, "completed", False):
+        return False
+    # 报时/停止等本地命令不是对话内容，不写入长期记忆。
+    if getattr(turn, "local_command", ""):
         return False
     try:
         return writer.enqueue(memory_writer.WriteJob.from_turn(turn))

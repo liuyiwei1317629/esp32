@@ -2,8 +2,10 @@ import queue
 import threading
 import time
 
+import commands
 import config
 import llm
+import local_commands
 import memory_context
 from sentence_split import SentenceSplitter
 
@@ -48,6 +50,7 @@ class Turn:
         self.reply_text = ""
         self.completed = False
         self.selected_ids = []
+        self.local_command = ""
         self._staged = False
 
     @property
@@ -59,6 +62,32 @@ class Turn:
         threading.Thread(target=self._tts_stage, daemon=True).start()
 
     def _llm_stage(self):
+        try:
+            if self._handle_local_command():
+                return
+            self._stream_llm()
+        except Exception as exc:
+            self.error = "%s: %s" % (type(exc).__name__, exc)
+        finally:
+            self.sentence_q.put(STOP)
+
+    def _handle_local_command(self):
+        command = commands.parse_command(self.user_text)
+        if command is None:
+            return False
+        self.local_command = command.kind
+        reply = local_commands.reply_for(command)
+        if not reply:
+            return True
+        self.reply_text = reply
+        for sentence in self.splitter.feed(reply):
+            self.sentence_q.put(sentence)
+        tail = self.splitter.flush()
+        if tail:
+            self.sentence_q.put(tail)
+        return True
+
+    def _stream_llm(self):
         def on_content(text):
             if self.stale:
                 return
@@ -70,17 +99,12 @@ class Turn:
                 self.sentence_q.put(sentence)
 
         messages = self._messages()
-        try:
-            self.stats = llm.stream_reply(messages, on_content, abort=self.abort)
-            if self.stale:
-                return
-            tail = self.splitter.flush()
-            if tail:
-                self.sentence_q.put(tail)
-        except Exception as exc:
-            self.error = "%s: %s" % (type(exc).__name__, exc)
-        finally:
-            self.sentence_q.put(STOP)
+        self.stats = llm.stream_reply(messages, on_content, abort=self.abort)
+        if self.stale:
+            return
+        tail = self.splitter.flush()
+        if tail:
+            self.sentence_q.put(tail)
 
     def _messages(self):
         if config.MEMORY_ENABLED and self.bridge.memory_store is not None:

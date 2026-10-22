@@ -74,7 +74,7 @@ _MIN_SECONDS = 1
 _MAX_SECONDS = 86400
 
 _NEGATION_PATTERNS = (
-    re.compile(r"(?:别|不要|不用)(?:提醒|定时|计时)"),
+    re.compile(r"(?:别|不要|不用)(?:提醒|定时|计时|叫我)"),
     re.compile(r"取消[^，。！？!?]{0,6}(?:提醒|定时|计时|闹钟|倒计时)"),
     re.compile(r"关掉[^，。！？!?]{0,6}(?:闹钟|提醒|计时)"),
     re.compile(r"停止(?:计时|倒计时)"),

@@ -429,6 +429,27 @@ class ServerWriteIntegrationTest(unittest.TestCase):
         self.assertEqual(snapshot(self.root), before)
         self.assertEqual(writer.counters()["rejected_sensitive"], 1)
 
+    def test_local_command_turn_skips_llm_and_memory(self):
+        before = snapshot(self.root)
+        writer, cache_at_terminal, seen = self.serve_turn(
+            "现在几点", dry_run=True)
+
+        self.assertEqual(seen, [])
+        self.assertEqual(cache_at_terminal["turns"], [])
+        self.assertEqual(snapshot(self.root), before)
+        self.assertEqual(writer.counters().get("dry_run_jobs", 0), 0)
+
+    def test_enqueue_memory_skips_local_command_turns(self):
+        turn = SimpleNamespace(
+            completed=True, local_command="time", gen=1, session_id="dev1",
+            user_text="现在几点", reply_text="现在是上午九点整。",
+            stats={"finish_reason": "stop", "done": True})
+        writer = mock.Mock()
+        bridge = SimpleNamespace(memory_writer=writer)
+
+        self.assertFalse(server.enqueue_memory(bridge, turn))
+        writer.enqueue.assert_not_called()
+
 
 class ServerMemoryWiringTest(unittest.TestCase):
     def setUp(self):

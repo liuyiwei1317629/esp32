@@ -41,7 +41,7 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
 .venv/Scripts/python.exe bridge/server.py --text "今天好累啊" --play --no-cosyvoice
 ```
 
-单元测试：`test_sentence_split.py`（8 项切分规则）、`test_llm.py`（9 项 SSE 解析）、`test_pipeline.py`（5 项并发与打断）。
+单元测试：`test_sentence_split.py`（8 项切分规则）、`test_llm.py`（9 项 SSE 解析）、`test_pipeline.py`（6 项并发、打断与本地命令短路）。其余 17 个 `unittest` 模块用显式清单跑，见 `HANDOFF.md` §9。
 
 ## 密钥放在工作区外
 
@@ -55,9 +55,9 @@ echo 随便一个共享串 > ~/.deepseek/bridge_token
 
 也可用环境变量 `DEEPSEEK_API_KEY` / `BRIDGE_TOKEN`。`bridge_token` 未设置时服务会打印 WARN 并放行——只在专用网络下可接受。
 
-## 大脑路由与本地插件（路由已实现 2026-10-22；本地插件仍为设计）
+## 大脑路由与本地插件（路由 2026-10-22；规则命令 2026-10-23 已接入；本地小模型仍为设计）
 
-> 现状：`brains.py` + `llm.py` 已实现 profile 读取、通用 OpenAI 兼容流式客户端、`active`/`fallback`、失败重试、冷却/探测；`server.py` 提供 `--brain` 和 `POST /brain`。**本地功能插件仍未下载、未接入**，云端全挂时本轮直接报错，不会假装本地能陪伴。
+> 现状：`brains.py` + `llm.py` 已实现 profile 读取、通用 OpenAI 兼容流式客户端、`active`/`fallback`、失败重试、冷却/探测；`server.py` 提供 `--brain` 和 `POST /brain`。**规则命令（stop/time/timer）已在 `pipeline.Turn` 内本地短路**；**本地小模型仍未下载、未接入**，云端全挂时除本地命令外本轮直接报错，不会假装本地能陪伴。
 
 ### 角色边界
 
@@ -124,7 +124,7 @@ price_out_cny_per_mtok = 0.0
 
 - 启动：`--brain kimi` 或 `BRAIN_PROFILE=kimi`；启动日志打印当前 brain 状态。
 - 运行时：`POST /brain`，body `{"profile":"kimi"}`，带 `X-Auth`，**下一轮生效**；当前回复不打断。返回 `active`/`pinned`/`cooling`。
-- 失败链：当前 profile → `fallback` 里的下一个 profile。**本地功能模式尚未接入**；所有 profile 都失败时本轮报错。
+- 失败链：当前 profile → `fallback` 里的下一个 profile。**本地小模型尚未接入**（本地规则命令不经过 profile）；所有 profile 都失败时本轮报错。
 - 首 token 3 s 超时（从发起请求算起，含连接/响应头）、连接失败、5xx/408/425 才重试一次；401/403/402/429 不重试，直接换下一个。
 - **已出声不混脑**：一旦向 TTS 送出内容，不在回复中途切换；当前句收尾，下一轮再切。
 - 失败后进入冷却，连续失败冷却 5/15/30 分钟；配置里的 primary 由后台线程探测，恢复后自动切回。显式 `/brain` 切换是 pin，不会自动切回 primary。
@@ -159,6 +159,15 @@ D 包已实现，写 `~/.voice-ai/usage.jsonl`，每轮一行：
 - 下载源：ModelScope 首选（`unsloth/Qwen3.5-2B-GGUF` 等仓库体积已核实），Ollama 次选，hf-mirror 兜底；HF 直连在本机不可用。下载前核对仓库 LICENSE，模型放 D:。
 - 本地插件默认无状态、懒加载；空闲或云端恢复后释放显存（Ollama `keep_alive=0`）。功能插件不需要多模态投影文件（`mmproj-*`）。
 
+### 规则命令（C，已接入 2026-10-23）
+
+- 入口：`commands.parse_command(text) -> Command | None`，`kind` 只有 `stop` / `time` / `timer`；`local_commands.reply_for(cmd)` 只生成回复文本。
+- `pipeline.Turn._handle_local_command()` 在组装消息、调用 LLM 之前短路；命中后文本仍走原有切句、TTS 与 chunked PCM，`turn.local_command` 记录 kind。
+- 本地命令不读记忆、不调 LLM；`server.enqueue_memory` 对 `local_command` 非空回合跳过 writer，不写记忆、不进 `recent_cache`、不写用量账本。
+- 回复：`stop` →「好。」；`time` → 本机时间；`timer` → 确认时长/标签，并明确「现在还不能到点主动出声」。
+- **不做定时线程**：HTTP 是请求/响应契约，回合外无法主动出声；真正到点提醒需要设备端长轮询/WebSocket 或本地蜂鸣器。
+- 否定误判已修：`五分钟后别叫我` 不再解析成 timer。单测 `test_commands.py`（54 例）+ `test_local_commands.py`（13 例）。
+
 ### 上下文与长期记忆
 
 “不带 DSH 上下文和工具”只表示不把 DSH 的系统提示、工作区文件、工具定义、完整会话历史塞进语音请求；**不等于没有长期记忆**。
@@ -184,8 +193,8 @@ D 包已实现，写 `~/.voice-ai/usage.jsonl`，每轮一行：
 - 预算：`MEMORY_INPUT_BUDGET_TOKENS=1050` 硬上限；本轮输入 `MEMORY_CURRENT_INPUT_MAX_CHARS=500`；超限按 摘要→记忆→历史 裁剪，人格与本轮输入不砍。
 - 会话：`memory_store.parse_session_id()` 独立解析 `session_id`；响应头 `X-Session-Id` 仍是旧值 `d=dev1`，记忆桶不依赖该头。
 - 读路径投影与缓存上限（阶段 5）：`active_facts()`/`active_episodes()` 只复制顶层字段并过滤 active，返回值只读，调用方不得修改嵌套 `history`；`facts()`/`episodes()` 仍深拷贝供维护/管理。`MemoryStore(max_sessions=64)` 与 `RecentCache(max_sessions=64)` 做 LRU，`MemoryWriter(seen_gen_limit=8192)` 做 FIFO 去重上限。
-- 测试：9 个 `test_memory_*.py` 共 **200 例**（148 纯模块 + 22 集成 + 25 writer + 5 读路径/上限），只用标准库、不联网、不占 GPU。覆盖 dry-run 零落盘、敏感回合零缓存、终块前 `recent_cache` 可见、命中每 5 回合批量刷、维护启动/50 回合触发、debug 不含原文、退出补刷、`schema_version` 过新只读告警与非法数值环境变量回退、只读投影与缓存界限。
-- 回归入口：用显式模块清单（20 个模块、**355 例**）；**不要用裸 `unittest discover`**——`test_e2e.py` / `test_live.py` 是脚本式测试，import 即执行真实 HTTP/ASR/TTS/云端调用（`test_live` 启动 CosyVoice、占 GPU、写用量账本）。
+- 测试：9 个 `test_memory_*.py` 共 **202 例**（151 纯模块 + 27 writer + 24 集成），只用标准库、不联网、不占 GPU。覆盖 dry-run 零落盘、敏感回合零缓存、终块前 `recent_cache` 可见、命中每 5 回合批量刷、维护启动/50 回合触发、debug 不含原文、退出补刷、`schema_version` 过新只读告警与非法数值环境变量回退、只读投影与缓存界限、本地命令回合跳过 LLM 与记忆。
+- 回归入口：用显式清单（17 个 unittest 模块、**371 例** + 3 个脚本自检 **23 例**）；**不要用裸 `unittest discover`**——`test_e2e.py` / `test_live.py` / `test_edge_content.py` 是脚本式测试，import 即执行真实 HTTP/ASR/TTS/云端调用（`test_live` 启动 CosyVoice、占 GPU、写用量账本）。
 - 读路径延迟：阶段 5 前 500 episodes + 500 字输入 + 预热 token cache 的 `build_for_turn` 为 p50 6.1–13.0 ms / p95 6.6–15.0 ms；只读投影后本机复测 **p50 1.93 ms / p95 2.06 ms**（`active_episodes` p50 0.10 ms，原 3.90 ms）。**硬门 p95 ≤20 ms**，<5 ms 目标已达成。
 - 未做：真实目录启用（待确认 + 备份）、`memory_debug.jsonl`、`MEMORY_LLM`/`memory_usage.jsonl`、p95 自动回归门。**默认 dry-run 下 `hits` 不增长，晋升不会发生。**
 
@@ -202,8 +211,10 @@ D 包已实现，写 `~/.voice-ai/usage.jsonl`，每轮一行：
 5. ~~五层记忆阶段 2（只读接入，默认关闭）~~ → 已完成（集成 16 例）。
 6. ~~五层记忆阶段 3（异步写队列 + dry-run）~~ → 已完成（2026-10-23，writer 18 例、集成 19 例）；默认不落盘。
 7. ~~五层记忆阶段 4（维护 + 可观测性 + 退出补刷）~~ → 代码已完成（2026-10-23，writer 25 例、集成 22 例）；临时目录真实写入验收，默认仍 dry-run。真实目录启用需先备份并取得用户确认。
-8. 下载 Qwen3.5-2B Q4_K_M（1.19 GiB，放 D:），接到本地插件入口。
-9. 最后再考虑语音口令切换和故障模式的设备提示。
+8. ~~五层记忆阶段 5（读路径只读投影 + 缓存上限）~~ → 已完成（2026-10-23）；记忆 202 例。
+9. ~~规则命令（C）接入~~ → 已完成（2026-10-23，`commands.py` + `local_commands.py`）；`timer` 只确认、不到点响。
+10. 下载 Qwen3.5-2B Q4_K_M（1.19 GiB，放 D:），接到本地插件入口。
+11. 最后再考虑语音口令切换和故障模式的设备提示。
 
 ## 实测（2026-10-20，edge-tts 路径 + 假 LLM）
 
@@ -320,7 +331,8 @@ SenseVoice 在 CPU 上单次调用 **0.15–0.40 s**（`rtf_avg` 0.04–0.25，�
 - 设备侧起始水位 150–200 ms 未实现（无硬件）
 - ~~尚未用真人语音跑过完整一轮~~ → 已跑（2026-10-21 01:36，`--mic --play`）：用户说「好，说话了。」→ ASR 297 ms → TTFT 0.309 s → 首句 11 字 CosyVoice 2967 ms（270 ms/字，**上界**：与另一会话 GPU 占用重叠）→ 首字节 **3967 ms**，退出码 0，扬声器播放正常。
 - ~~大脑路由（profile + `/brain` + fallback）~~ → 已实现（2026-10-22，见「大脑路由与本地插件」节）
-- ~~五层记忆阶段 1/2/3/4/5（纯模块 + 只读接入 + writer dry-run + 维护/退出补刷 + 读路径投影/缓存上限）~~ → 已完成（2026-10-23，200 例）；默认关闭，dry-run 不写盘
+- ~~五层记忆阶段 1/2/3/4/5（纯模块 + 只读接入 + writer dry-run + 维护/退出补刷 + 读路径投影/缓存上限）~~ → 已完成（2026-10-23，202 例）；默认关闭，dry-run 不写盘
+- ~~规则命令（C）~~ → 已接入（2026-10-23，54 + 13 例）；`timer` 只确认、不到点响
 - 五层记忆真实目录启用（备份 + `MEMORY_DRY_RUN=0` + 用户确认）—— 未开始
 - 硬件上机（RECORD_ONLY → TURN → TURN_STOP）—— 固件三模式编译通过，未烧录；按 `handoff/G-hardware-bringup.md`
 - 本地功能插件（Qwen3.5-2B Q4_K_M，1.19 GiB）—— 未下载、未接入
