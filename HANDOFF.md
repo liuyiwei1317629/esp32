@@ -395,7 +395,7 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml com
 13. **首字节 2.4–5.3 s**：距 1.5–2 s 目标有差距；E 未做，首句字数和 TTS 速度是主因。
 14. **没有本地对话脑**：PC 关机/断网/云端不可用即无法对话；本地插件模型未下载。
 15. **记忆明文与个人音频**：`~/.voice-ai/memory/` 是明文短句；`bridge/out/`、`test-data/` 有真人录音。不要上传、不要贴公开仓库。
-16. **git 基线已建立**：源码/文档/测试已入库并推送（`5d7c279` 起）；`.gitignore` 已排除运行时、模型、音频、日志与 `secrets.h`。后续提交仍要逐项暂存，不要 `git add -A`。
+16. **git 基线已建立**：源码/文档/测试已入库并推送（`5d7c279`、`d9cda6b`）；`.gitignore` 已排除运行时、模型、音频、日志与 `secrets.h`。后续提交仍要逐项暂存，不要 `git add -A`。
 
 ## 11. 环境与路径
 
@@ -564,7 +564,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 
 ### 14.5 版本与备份
 
-- 已有 git 基线：`5d7c279` 起源码/文档/测试入库并推送到 `origin/main`；`.gitignore` 排除 `.venv`、`py311`、`models`、`CosyVoice`、`bridge/out`、`bridge/logs`、`test-data` 生成物、`*.log`、安装包与 `secrets.h`。新生成物若未被忽略，先补 `.gitignore` 再提交。
+- 已有 git 基线：`5d7c279`、`d9cda6b` 已将源码/文档/测试入库并推送到 `origin/main`；`.gitignore` 排除 `.venv`、`py311`、`models`、`CosyVoice`、`bridge/out`、`bridge/logs`、整个 `test-data/`、`*.log`、安装包与 `secrets.h`。新生成物若未被忽略，先补 `.gitignore` 再提交。
 - 记忆目录、账本、密钥不进入 git。
 - 升级前备份 `~/.voice-ai/brains.toml`、`~/.voice-ai/memory/`、`~/.voice-ai/usage.jsonl`（如存在）。
 
