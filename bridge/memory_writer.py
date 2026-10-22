@@ -10,6 +10,7 @@
 import queue
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import memory_context
@@ -18,6 +19,8 @@ import memory_store
 
 QUEUE_MAXSIZE = 64
 RECENT_TURNS = 2
+RECENT_CACHE_SESSIONS = 64
+SEEN_GEN_LIMIT = 8192
 HIT_FLUSH_TURNS = 5
 SHUTDOWN_WAIT_SECONDS = 2.0
 MIN_CONFIDENCE = 0.7
@@ -80,8 +83,10 @@ class WriteJob:
 class RecentCache:
     """进程内每 session 最近 2 轮；worker 落盘前下一轮就能读到。"""
 
-    def __init__(self, limit=RECENT_TURNS):
+    def __init__(self, limit=RECENT_TURNS,
+                 max_sessions=RECENT_CACHE_SESSIONS):
         self.limit = max(1, int(limit))
+        self.max_sessions = max(1, int(max_sessions))
         self._lock = threading.Lock()
         self._items = {}
 
@@ -95,15 +100,25 @@ class RecentCache:
             return False
         sid = str(session_id or "anon")
         with self._lock:
-            turns = self._items.setdefault(sid, [])
+            turns = self._items.pop(sid, None)
+            if turns is None:
+                turns = []
             turns.append(item)
             del turns[:-self.limit]
+            self._items[sid] = turns
+            while len(self._items) > self.max_sessions:
+                oldest = next(iter(self._items))
+                self._items.pop(oldest, None)
         return True
 
     def get(self, session_id):
         sid = str(session_id or "anon")
         with self._lock:
-            return [dict(item) for item in self._items.get(sid, ())]
+            turns = self._items.pop(sid, None)
+            if turns is None:
+                return []
+            self._items[sid] = turns
+            return [dict(item) for item in turns]
 
     def clear(self):
         with self._lock:
@@ -113,22 +128,28 @@ class RecentCache:
 class MemoryWriter:
     def __init__(self, store, dry_run=True, clock=None,
                  queue_maxsize=QUEUE_MAXSIZE, debug=False,
-                 hit_flush_turns=HIT_FLUSH_TURNS):
+                 hit_flush_turns=HIT_FLUSH_TURNS, maintenance=None,
+                 seen_gen_limit=SEEN_GEN_LIMIT):
         self.store = store
         self.dry_run = bool(dry_run)
         self.debug = bool(debug)
         self.clock = clock or memory_store.utc_now
         self.hit_flush_turns = max(1, int(hit_flush_turns))
+        self.maintenance = maintenance
         self.recent_cache = RecentCache()
         self._queue = queue.Queue(maxsize=max(1, int(queue_maxsize)))
         self._lock = threading.Lock()
         self._idle = threading.Condition()
         self._in_flight = 0
         self._seen_gens = set()
+        self._seen_gen_order = deque()
+        self.seen_gen_limit = max(1, int(seen_gen_limit))
         self._pending_hits = []
         self._hit_turns = 0
+        self._turns_since_maintenance = self._restore_turn_counter()
         self._counters = {}
         self._stopping = False
+        self._evaluate_maintenance_at_start()
         self._thread = threading.Thread(target=self._worker,
                                         name="memory-writer", daemon=True)
         self._thread.start()
@@ -143,6 +164,9 @@ class MemoryWriter:
         with self._lock:
             duplicate = job.gen in self._seen_gens
             if not duplicate:
+                if len(self._seen_gen_order) >= self.seen_gen_limit:
+                    self._seen_gens.discard(self._seen_gen_order.popleft())
+                self._seen_gen_order.append(job.gen)
                 self._seen_gens.add(job.gen)
         if duplicate:
             self._bump("rejected_duplicate")
@@ -186,6 +210,38 @@ class MemoryWriter:
         self._thread.join(timeout)
         if not self.dry_run:
             self._flush_hits()
+
+    # ------------------------------------------------------------------
+    # 维护
+    # ------------------------------------------------------------------
+    def _restore_turn_counter(self):
+        try:
+            return max(0, int(self.store.state.get("turns_since_maintenance") or 0))
+        except (AttributeError, TypeError, ValueError):
+            return 0
+
+    def _maintenance_active(self):
+        return (self.maintenance is not None and not self.dry_run
+                and not getattr(self.store, "read_only", False))
+
+    def _evaluate_maintenance_at_start(self):
+        if self._maintenance_active():
+            self._run_maintenance(None)
+
+    def _run_maintenance(self, completed_turns):
+        try:
+            summary = self.maintenance.maybe_run(
+                now=self.clock(), completed_turns=completed_turns)
+        except Exception:
+            self._bump("maintenance_errors")
+            return None
+        if summary is None:
+            return None
+        self._turns_since_maintenance = 0
+        self._bump("maintenance_runs")
+        if self.debug:
+            print("memory: maintenance %s" % (summary,))
+        return summary
 
     # ------------------------------------------------------------------
     # worker
@@ -249,6 +305,9 @@ class MemoryWriter:
         self.store.save_session(job.session_id, session, now=now)
         self._bump("written_jobs")
         self._record_hits(job)
+        if self._maintenance_active():
+            self._turns_since_maintenance += 1
+            self._run_maintenance(self._turns_since_maintenance)
         if self.debug:
             print("memory: session=%s written candidates=%d"
                   % (job.session_id, len(candidates)))

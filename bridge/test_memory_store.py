@@ -1,7 +1,9 @@
+import copy
 import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -335,6 +337,56 @@ class PersistenceTest(StoreTestCase):
         leftovers = [name for name in os.listdir(self.store.root)
                      if ".tmp." in name]
         self.assertEqual(leftovers, [])
+
+    def test_active_records_are_detached_read_only_views(self):
+        self.fact()
+        self.store.upsert_episode(
+            "todo", "用户要交设计稿", slot="todo:x", now=FIXED)
+        fact_view = self.store.active_facts()[0]
+        episode_view = self.store.active_episodes()[0]
+        fact_view["text"] = "changed"
+        episode_view["text"] = "changed"
+        self.assertEqual(self.store.active_facts()[0]["text"], "用户叫小林")
+        self.assertEqual(self.store.active_episodes()[0]["text"], "用户要交设计稿")
+
+    def test_active_episodes_is_much_cheaper_than_full_deepcopy(self):
+        records = [{
+            "id": "ep-%04d" % index,
+            "kind": "todo",
+            "text": "episode %d about design draft" % index,
+            "slot": "todo:%d" % index,
+            "status": "active",
+            "created_at": "2026-10-23T01:00:00+00:00",
+            "updated_at": "2026-10-23T01:00:00+00:00",
+        } for index in range(500)]
+        with open(self.store.episodes_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(json.dumps(item) for item in records) + "\n")
+        store = memory_store.MemoryStore(self.tmp.name, clock=lambda: FIXED)
+        store.active_episodes()
+
+        def best_ms(fn, rounds=7):
+            samples = []
+            for _ in range(rounds):
+                start = time.perf_counter()
+                fn()
+                samples.append(time.perf_counter() - start)
+            return min(samples)
+
+        active = best_ms(store.active_episodes)
+        full = best_ms(lambda: copy.deepcopy(store._load_file("episodes")))
+        self.assertLess(active * 4, full)
+
+    def test_session_cache_is_bounded_and_reloads_from_disk(self):
+        store = memory_store.MemoryStore(
+            self.tmp.name, clock=lambda: FIXED, max_sessions=2)
+        for sid in ("s1", "s2", "s3"):
+            store.save_session(sid, {"summary": sid})
+        cached = {item["session_id"] for item in store._sessions.values()}
+        self.assertEqual(cached, {"s2", "s3"})
+        self.assertEqual(store.load_session("s1")["summary"], "s1")
+        cached = {item["session_id"] for item in store._sessions.values()}
+        self.assertEqual(cached, {"s1", "s3"})
+        self.assertEqual(len(store._session_stat), len(store._sessions))
 
     def test_failed_record_write_invalidates_cache(self):
         from unittest import mock

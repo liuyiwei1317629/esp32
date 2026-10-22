@@ -28,6 +28,7 @@ ACTIVE_FACTS_MAX = 200
 ACTIVE_EPISODES_MAX = 500
 TOMBSTONE_KEEP_DAYS = 365
 LOCK_STALE_SECONDS = 10.0
+SESSION_CACHE_MAX = 64
 
 FACT_KINDS = frozenset({"fact", "preference", "relation", "residence", "name"})
 EPISODE_KINDS = frozenset({
@@ -266,7 +267,8 @@ class MemoryStore:
     """
 
     def __init__(self, root=None, clock=None, lock_timeout=2.0,
-                 stale_lock_seconds=LOCK_STALE_SECONDS):
+                 stale_lock_seconds=LOCK_STALE_SECONDS,
+                 max_sessions=SESSION_CACHE_MAX):
         if root is None:
             root = os.environ.get(
                 "MEMORY_DIR",
@@ -281,6 +283,7 @@ class MemoryStore:
         self.clock = clock or utc_now
         self.lock_timeout = float(lock_timeout)
         self.stale_lock_seconds = float(stale_lock_seconds)
+        self.max_sessions = max(1, int(max_sessions))
 
         self._guard = threading.RLock()
         self._guard_depth = 0
@@ -302,6 +305,7 @@ class MemoryStore:
         }
         self._sessions = {}
         self._session_stat = {}
+        self._sessions_guard = threading.Lock()
         self._bad_lines = {"facts": 0, "episodes": 0}
         self._unknown_kinds = 0
         self._state = None
@@ -698,11 +702,17 @@ class MemoryStore:
             return records
         return [item for item in records if item.get("status") == "active"]
 
+    def _active_records(self, kind):
+        """读路径投影：只复制顶层字段，调用方不得修改返回的嵌套值。"""
+        with self._file_locks[kind]:
+            return [dict(item) for item in self._load_file(kind)
+                    if item.get("status") == "active"]
+
     def active_facts(self):
-        return self.facts(include_tombstone=False)
+        return self._active_records("facts")
 
     def active_episodes(self):
-        return self.episodes(include_tombstone=False)
+        return self._active_records("episodes")
 
     def find(self, record_id_value):
         for kind in ("facts", "episodes"):
@@ -1049,6 +1059,29 @@ class MemoryStore:
                 self._session_locks[bucket] = lock
             return lock
 
+    def _remember_session(self, bucket, record, stat_key):
+        with self._sessions_guard:
+            self._sessions.pop(bucket, None)
+            self._session_stat.pop(bucket, None)
+            self._sessions[bucket] = record
+            self._session_stat[bucket] = stat_key
+            while len(self._sessions) > self.max_sessions:
+                oldest = next(iter(self._sessions))
+                self._sessions.pop(oldest, None)
+                self._session_stat.pop(oldest, None)
+
+    def _cached_session(self, bucket, stat_key):
+        with self._sessions_guard:
+            cached = self._sessions.get(bucket)
+            if cached is None or stat_key is None \
+                    or self._session_stat.get(bucket) != stat_key:
+                return None
+            self._sessions.pop(bucket, None)
+            self._session_stat.pop(bucket, None)
+            self._sessions[bucket] = cached
+            self._session_stat[bucket] = stat_key
+            return cached
+
     def session_path(self, session_id):
         sid = str(session_id if session_id is not None else "anon")
         if not sid:
@@ -1075,9 +1108,8 @@ class MemoryStore:
         lock = self._session_lock(bucket)
         with lock:
             stat_key = self._stat_key(path)
-            cached = self._sessions.get(bucket)
-            if cached is not None and stat_key is not None \
-                    and self._session_stat.get(bucket) == stat_key:
+            cached = self._cached_session(bucket, stat_key)
+            if cached is not None:
                 return copy.deepcopy(cached)
             record = self.default_session(session_id)
             if stat_key is not None:
@@ -1089,8 +1121,7 @@ class MemoryStore:
                         self.bump_counter("backup_restored", persist=False)
                     else:
                         record = self.default_session(session_id)
-            self._sessions[bucket] = record
-            self._session_stat[bucket] = self._stat_key(path)
+            self._remember_session(bucket, record, self._stat_key(path))
             return copy.deepcopy(record)
 
     def _read_session_file(self, path, session_id):
@@ -1138,8 +1169,7 @@ class MemoryStore:
                 record["updated_at"] = iso_now(self._now(now))
                 self._ensure_root()
                 self._atomic_write_json(path, record)
-                self._sessions[bucket] = record
-                self._session_stat[bucket] = self._stat_key(path)
+                self._remember_session(bucket, record, self._stat_key(path))
                 return copy.deepcopy(record)
 
     def _sanitize_turns(self, turns):

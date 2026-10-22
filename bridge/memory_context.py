@@ -415,6 +415,21 @@ def fallback_messages(persona, user_text,
     return messages
 
 
+def format_debug(info):
+    """单行计数；只输出层计数与预算，绝不输出记忆或用户原文。"""
+    if info.get("fallback"):
+        return "memory: fallback=True error=%s" % (info.get("error") or "-")
+    trimmed = ",".join(info.get("trimmed") or ()) or "-"
+    warnings = ",".join(info.get("warnings") or ()) or "-"
+    return ("memory: L1=%d L2=%d L3=%d L4=%d total=%d/%d "
+            "trimmed=%s current=%d warnings=%s"
+            % (int(info.get("l1") or 0), int(info.get("l2_chars") or 0),
+               int(info.get("l3") or 0), int(info.get("l4_turns") or 0),
+               int(info.get("total_tokens") or 0),
+               int(info.get("budget_tokens") or 0), trimmed,
+               int(info.get("current_chars") or 0), warnings))
+
+
 def build_for_turn(store, persona, session_id, user_text,
                    budget_tokens=TOTAL_BUDGET_TOKENS, recent_cache=None,
                    token_cache=None, now=None,

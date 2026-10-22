@@ -10,10 +10,26 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import memory_context
+import memory_maintenance
 import memory_store
 import memory_writer
 
 NOW = datetime(2026, 10, 23, 2, 0, tzinfo=timezone.utc)
+
+
+class FakeMaintenance:
+    def __init__(self, trigger_at=None, fail=False):
+        self.calls = []
+        self.trigger_at = trigger_at
+        self.fail = fail
+
+    def maybe_run(self, now=None, completed_turns=None):
+        self.calls.append(completed_turns)
+        if self.fail:
+            raise RuntimeError("maintenance boom")
+        if self.trigger_at is not None and completed_turns == self.trigger_at:
+            return {"promoted": 0}
+        return None
 
 
 def make_job(**overrides):
@@ -241,6 +257,25 @@ class WriterTest(unittest.TestCase):
                          ["u1", "u2"])
         self.assertEqual(cache.get("other"), [])
 
+    def test_recent_cache_bounds_session_count(self):
+        cache = memory_writer.RecentCache(max_sessions=2)
+        for sid in ("s1", "s2", "s3"):
+            cache.record(sid, "u", "a", "2026-10-23T02:00:00+00:00")
+        self.assertEqual(set(cache._items), {"s2", "s3"})
+        self.assertEqual(cache.get("s1"), [])
+        cache.get("s2")
+        cache.record("s4", "u", "a", "2026-10-23T02:00:00+00:00")
+        self.assertEqual(set(cache._items), {"s2", "s4"})
+
+    def test_seen_generations_are_bounded(self):
+        writer = self.make_writer(seen_gen_limit=2)
+        for gen in (1, 2, 3):
+            self.assertTrue(writer.enqueue(make_job(
+                gen=gen, user="问题%d" % gen)))
+        self.assertTrue(writer.wait_idle())
+        self.assertEqual(writer._seen_gens, {2, 3})
+        self.assertEqual(writer.counters()["written_jobs"], 3)
+
     def test_recent_turns_are_clipped_in_session(self):
         writer = self.make_writer()
         for index in range(1, 4):
@@ -251,6 +286,124 @@ class WriterTest(unittest.TestCase):
         session = self.store.load_session("dev1")
         self.assertEqual([item["user"] for item in session["recent_turns"]],
                          ["问题2", "问题3"])
+
+
+class MaintenanceWiringTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = memory_store.MemoryStore(self.tmp.name, clock=lambda: NOW)
+
+    def make_writer(self, maintenance, **kwargs):
+        writer = memory_writer.MemoryWriter(
+            self.store, dry_run=False, clock=lambda: NOW,
+            maintenance=maintenance, **kwargs)
+        self.addCleanup(writer.stop)
+        return writer
+
+    def test_startup_and_each_completed_turn_are_evaluated(self):
+        maintenance = FakeMaintenance()
+        writer = self.make_writer(maintenance)
+        self.assertEqual(maintenance.calls, [None])
+
+        for gen in (1, 2):
+            self.assertTrue(writer.enqueue(make_job(gen=gen)))
+        self.assertTrue(writer.wait_idle())
+
+        self.assertEqual(maintenance.calls, [None, 1, 2])
+        self.assertEqual(writer.counters().get("maintenance_runs", 0), 0)
+
+    def test_counter_restores_from_state_and_trigger_resets_it(self):
+        state = self.store.state
+        state["turns_since_maintenance"] = 12
+        self.store.save_state(state)
+        maintenance = FakeMaintenance(trigger_at=15)
+        writer = self.make_writer(maintenance)
+        self.assertEqual(maintenance.calls, [None])
+
+        for gen in (1, 2, 3, 4):
+            self.assertTrue(writer.enqueue(make_job(gen=gen)))
+        self.assertTrue(writer.wait_idle())
+
+        self.assertEqual(maintenance.calls, [None, 13, 14, 15, 1])
+        self.assertEqual(writer.counters()["maintenance_runs"], 1)
+
+    def test_maintenance_failure_does_not_block_writes(self):
+        writer = self.make_writer(FakeMaintenance(fail=True))
+        self.assertTrue(writer.enqueue(make_job()))
+        self.assertTrue(writer.wait_idle())
+
+        self.assertEqual(writer.counters()["written_jobs"], 1)
+        self.assertGreaterEqual(writer.counters()["maintenance_errors"], 1)
+        self.assertEqual([item["text"] for item in self.store.active_facts()],
+                         ["用户叫小林"])
+
+    def test_dry_run_never_calls_maintenance(self):
+        maintenance = FakeMaintenance()
+        writer = memory_writer.MemoryWriter(
+            self.store, dry_run=True, clock=lambda: NOW,
+            maintenance=maintenance)
+        self.addCleanup(writer.stop)
+        self.assertTrue(writer.enqueue(make_job()))
+        self.assertTrue(writer.wait_idle())
+        self.assertEqual(maintenance.calls, [])
+        self.assertEqual(writer.counters()["dry_run_jobs"], 1)
+
+    def test_read_only_store_never_calls_maintenance(self):
+        self.store.read_only = True
+        maintenance = FakeMaintenance()
+        writer = self.make_writer(maintenance)
+        self.assertEqual(maintenance.calls, [])
+
+        self.assertTrue(writer.enqueue(make_job()))
+        self.assertTrue(writer.wait_idle())
+        self.assertEqual(maintenance.calls, [])
+        self.assertEqual(writer.counters()["read_only_jobs"], 1)
+
+
+class RealMaintenanceAcceptanceTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = memory_store.MemoryStore(self.tmp.name, clock=lambda: NOW)
+
+    def make_writer(self):
+        maintenance = memory_maintenance.MemoryMaintenance(
+            self.store, clock=lambda: NOW)
+        writer = memory_writer.MemoryWriter(
+            self.store, dry_run=False, clock=lambda: NOW,
+            maintenance=maintenance)
+        self.addCleanup(writer.stop)
+        return writer
+
+    def test_startup_maintenance_promotes_preference_and_records_state(self):
+        episode = self.store.upsert_episode(
+            "preference", "用户喜欢喝咖啡", slot="drink", now=NOW)
+        for _ in range(3):
+            self.store.mark_used(episodes=[episode["id"]], now=NOW)
+
+        writer = self.make_writer()
+
+        self.assertEqual([item["text"] for item in self.store.active_facts()],
+                         ["用户喜欢喝咖啡"])
+        self.assertEqual(self.store.active_episodes(), [])
+        state = self.store.state
+        self.assertEqual(state["last_maintenance"],
+                         "2026-10-23T02:00:00+00:00")
+        self.assertEqual(state["turns_since_maintenance"], 0)
+        self.assertEqual(writer.counters()["maintenance_runs"], 1)
+
+    def test_fifty_written_turns_trigger_maintenance_again(self):
+        writer = self.make_writer()
+        self.assertEqual(writer.counters()["maintenance_runs"], 1)
+
+        for gen in range(1, 51):
+            self.assertTrue(writer.enqueue(make_job(gen=gen)))
+        self.assertTrue(writer.wait_idle(timeout=10))
+
+        self.assertEqual(writer.counters()["maintenance_runs"], 2)
+        state = self.store.state
+        self.assertEqual(state["turns_since_maintenance"], 0)
 
 
 class WriteJobTest(unittest.TestCase):

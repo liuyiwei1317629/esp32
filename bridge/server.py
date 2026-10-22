@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
 import llm
+import memory_maintenance
 import memory_score
 import memory_store
 import memory_writer
@@ -99,6 +100,7 @@ def build_bridge(tts):
         store,
         dry_run=config.MEMORY_DRY_RUN or store.read_only,
         debug=config.MEMORY_DEBUG,
+        maintenance=memory_maintenance.MemoryMaintenance(store),
     )
     return Bridge(
         tts,
@@ -117,6 +119,19 @@ def enqueue_memory(bridge, turn):
         return writer.enqueue(memory_writer.WriteJob.from_turn(turn))
     except Exception as exc:
         print("  WARN memory writer: %s: %s" % (type(exc).__name__, exc))
+        return False
+
+
+def stop_memory(bridge):
+    """退出前补刷写队列；dry-run 下同样安全。"""
+    writer = getattr(bridge, "memory_writer", None)
+    if writer is None:
+        return False
+    try:
+        writer.stop()
+        return True
+    except Exception as exc:
+        print("  WARN memory writer stop: %s: %s" % (type(exc).__name__, exc))
         return False
 
 
@@ -241,10 +256,16 @@ def serve(bridge, asr):
               % (config.BRIDGE_HOST, config.BRIDGE_PORT))
     print("brain: %s" % json.dumps(llm.brain_status(), ensure_ascii=False))
     httpd = ThreadingHTTPServer((config.BRIDGE_HOST, config.BRIDGE_PORT), Handler)
-    print("bridge listening on http://%s:%d  (POST /turn, POST /stop, POST /brain)"
-          % (config.BRIDGE_HOST, config.BRIDGE_PORT))
-    sys.stdout.flush()
-    httpd.serve_forever()
+    try:
+        print("bridge listening on http://%s:%d  (POST /turn, POST /stop, POST /brain)"
+              % (config.BRIDGE_HOST, config.BRIDGE_PORT))
+        sys.stdout.flush()
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_memory(bridge)
+        httpd.server_close()
 
 
 def run_local(args, bridge, asr):
@@ -265,6 +286,7 @@ def run_local(args, bridge, asr):
     for block in turn.pcm_chunks():
         pcm += block
     enqueue_memory(bridge, turn)
+    stop_memory(bridge)
     report(timers, turn)
     if not pcm:
         print("no audio produced")
@@ -325,6 +347,7 @@ def record_mic(args, bridge, asr):
     for b in turn.pcm_chunks():
         out += b
     enqueue_memory(bridge, turn)
+    stop_memory(bridge)
     report(timers, turn, text)
     if args.play and out:
         os.makedirs(OUT_DIR, exist_ok=True)

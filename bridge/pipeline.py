@@ -96,6 +96,8 @@ class Turn:
                     token_cache=self.bridge.token_cache,
                     current_input_max_chars=config.MEMORY_CURRENT_INPUT_MAX_CHARS,
                 )
+                if config.MEMORY_DEBUG:
+                    print(memory_context.format_debug(info))
                 if not info.get("fallback"):
                     self.selected_ids = list(info.get("selected_ids") or ())
                     return messages

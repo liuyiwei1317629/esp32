@@ -299,6 +299,26 @@ class MemoryTurnIntegrationTest(unittest.TestCase):
             run_turn(bridge, "你好", sid)
         self.assertEqual(snapshot(self.root), before)
 
+    def test_debug_output_has_counts_but_no_memory_text(self):
+        store = make_store(self.root)
+        seen = []
+        out = io.StringIO()
+        private = "这是一句不该出现在调试输出里的用户原话"
+        with mock.patch.object(config, "MEMORY_ENABLED", True), \
+                mock.patch.object(config, "MEMORY_DEBUG", True), \
+                mock.patch.object(llm, "stream_reply", recording_stream(seen)), \
+                contextlib.redirect_stdout(out):
+            bridge = pipeline.Bridge(
+                FakeTts(), memory_store=store,
+                token_cache=memory_score.TokenCache())
+            run_turn(bridge, private, "dev1")
+        rendered = out.getvalue()
+        for label in ("memory: L1=", "L2=", "L3=", "L4=", "total=",
+                      "trimmed="):
+            self.assertIn(label, rendered)
+        self.assertNotIn(private, rendered)
+        self.assertNotIn("用户叫小林", rendered)
+
     def test_build_messages_accepts_current_input_limit(self):
         messages, info = memory_context.build_messages(
             "人格", [], "", "", [], [], "字" * 300,
@@ -525,6 +545,74 @@ class ServerMemoryWiringTest(unittest.TestCase):
                 mock.patch.object(server, "report", return_value=None):
             server.run_local(args, bridge, None)
         self.assertEqual(bridge.calls, [("你好", "local")])
+
+    def test_run_local_stops_writer_after_enqueue(self):
+        class FakeWriter:
+            def __init__(self):
+                self.stops = 0
+
+            def stop(self, timeout=memory_writer.SHUTDOWN_WAIT_SECONDS):
+                self.stops += 1
+                return True
+
+        class FakeTurn:
+            gen = 4
+            error = None
+            stats = {}
+
+            def __init__(self):
+                self.abort = threading.Event()
+
+            def pcm_chunks(self):
+                return iter(())
+
+        class FakeBridge:
+            def __init__(self):
+                self.memory_writer = FakeWriter()
+
+            def begin(self, text, timers, session_id="anon"):
+                return FakeTurn()
+
+        bridge = FakeBridge()
+        args = SimpleNamespace(text="你好", file=None, play=False)
+        with mock.patch.object(config, "MEMORY_ENABLED", True), \
+                mock.patch.object(server, "report", return_value=None):
+            server.run_local(args, bridge, None)
+        self.assertEqual(bridge.memory_writer.stops, 1)
+
+    def test_serve_stops_writer_and_closes_server_on_exit(self):
+        self.addCleanup(setattr, server.Handler, "bridge", None)
+        self.addCleanup(setattr, server.Handler, "asr", None)
+
+        class FakeWriter:
+            def __init__(self):
+                self.stops = 0
+
+            def stop(self, timeout=memory_writer.SHUTDOWN_WAIT_SECONDS):
+                self.stops += 1
+                return True
+
+        class FakeServer:
+            def __init__(self, address, handler):
+                self.closed = False
+
+            def serve_forever(self):
+                raise KeyboardInterrupt
+
+            def server_close(self):
+                self.closed = True
+
+        writer = FakeWriter()
+        bridge = SimpleNamespace(memory_writer=writer)
+        fake = FakeServer((config.BRIDGE_HOST, config.BRIDGE_PORT),
+                          server.Handler)
+        with mock.patch.object(config, "auth_token", return_value=None), \
+                mock.patch.object(server, "ThreadingHTTPServer",
+                                  return_value=fake), \
+                mock.patch.object(llm, "brain_status", return_value={}):
+            server.serve(bridge, None)
+        self.assertEqual(writer.stops, 1)
+        self.assertTrue(fake.closed)
 
     def test_build_bridge_only_constructs_memory_when_enabled(self):
         with mock.patch.object(config, "MEMORY_ENABLED", False), \
