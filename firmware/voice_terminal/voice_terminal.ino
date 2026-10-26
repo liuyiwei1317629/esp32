@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include "esp_heap_caps.h"
+#include "esp_psram.h"
 #include "config.h"
 #include "audio_io.h"
 #include "http_turn.h"
@@ -51,8 +52,10 @@ static bool abortPoll() {
 
 // ---------------- 串口日志 ----------------
 static void logState(const char* s) {
+  // 不用 ESP.getFreePsram()：它在本板会随 psramFound() 误报而恒为 0
   Serial.printf("state=%s heap=%u psram=%u\n", s,
-                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
 
 // ---------------- 44 字节 WAV 头（PCM=1，mono，16000 Hz，16 bit） ----------------
@@ -110,13 +113,20 @@ static size_t recordClip(uint32_t* out_ms) {
   int16_t peak = 0;
   int32_t raw_min = INT32_MAX, raw_max = INT32_MIN; double raw_sq = 0; uint32_t n_raw = 0;
   int16_t s16_min = INT16_MAX, s16_max = INT16_MIN;
+  bool voiceYet = false;
+  float noiseFloor = 200.0f;   // 环境底噪估计（s16 RMS），随静音帧缓慢下探
+
+  // 丢掉开头 5 帧（100 ms）。提示音播完到 I2S RX 重新使能之间会吃到一次
+  // 切换尖峰 + 功放余音（MAX98357A 本身有 ~20 ms 延迟），实测尾音持续约
+  // 60~100 ms。留在录音里会污染峰值统计：5 次实测的归一化倍数在 3.72x 与
+  // 7.48x 之间跳，表现为"同样距离说话，有时响有时轻"。
+  for (int i = 0; i < 5; i++) micReadRaw(raw, FRAME_SAMPLES, 50);
 
   for (;;) {
-    // 结束条件：松开按键 / 静音 1.2 s / 最长 15 s
+    // 结束条件：松开按键 / 静音 1.2 s（仅在人声出现之后）/ 最长 15 s
     if (!debouncedDown()) { s_waitRelease = false; break; }
     uint32_t now = millis();
     if (now - t0 >= REC_MAX_MS) break;
-    if (now - last_voice >= REC_SILENCE_END_MS) break;
     if (total_bytes + FRAME_SAMPLES * 2 > REC_BUF_BYTES) break;
 
     size_t got = micReadRaw(raw, FRAME_SAMPLES, 100);
@@ -142,7 +152,19 @@ static size_t recordClip(uint32_t* out_ms) {
     total_bytes += got * 2;
 
     float frame_rms = sqrtf((float)(frame_sq / got));
-    if (frame_rms >= REC_SILENCE_RMS) last_voice = millis();
+    float thr = noiseFloor * REC_VAD_FACTOR;
+    if (thr < (float)REC_VAD_MIN_RMS) thr = (float)REC_VAD_MIN_RMS;
+
+    if (frame_rms > thr) {
+      voiceYet = true;
+      last_voice = millis();
+    } else if (!voiceYet && frame_rms < noiseFloor) {
+      // 只在人声出现前跟踪底噪（慢速下探），开口后不再改阈值
+      noiseFloor = noiseFloor * 0.9f + frame_rms * 0.1f;
+    }
+
+    if (voiceYet && (millis() - last_voice >= REC_SILENCE_END_MS)) break;
+    if (!voiceYet && (millis() - t0 >= REC_LEAD_MS)) break;   // 一直没开口：别空录
   }
 
   uint32_t ms = millis() - t0;
@@ -152,18 +174,139 @@ static size_t recordClip(uint32_t* out_ms) {
   Serial.printf("mic_raw min=%ld max=%ld rms=%.0f | s16 min=%d max=%d rms=%.0f\n",
                 (long)(n_raw ? raw_min : 0), (long)(n_raw ? raw_max : 0), raw_rms,
                 (int)(n_s16 ? s16_min : 0), (int)(n_s16 ? s16_max : 0), rms);
-  Serial.printf("record_ms=%lu bytes=%u rms=%.0f peak=%d\n",
-                (unsigned long)ms, (unsigned)total_bytes, rms, (int)peak);
+  Serial.printf("record_ms=%lu bytes=%u rms=%.0f peak=%d floor=%.0f voice=%d\n",
+                (unsigned long)ms, (unsigned)total_bytes, rms, (int)peak,
+                (double)noiseFloor, (int)voiceYet);
 
   if (ms < REC_MIN_MS) {   // 短于 0.3 s 丢弃
     Serial.println("record_discarded=too_short");
     return 0;
   }
+  if (!voiceYet) {
+    Serial.println("record_discarded=no_voice(lead_timeout)");
+    return 0;
+  }
   return total_bytes;
+}
+
+// ---------------- 提示音（喇叭通路自检） ----------------
+// 发一声短"嘀"：开机一次、每次按下录音键一次。
+// 目的只有一个：把"软件没送数据"和"功放/喇叭不出声"当场分开。
+// 听到嘀 = 功放/喇叭/接线全好，问题只可能在话筒或数据处理。
+// 1024 点正弦表（Q15）。只在 setup 里算一次。
+// 为什么不用 sinf(2π·hz·k/fs) 直接算：k 累积到几万时相位参数会到 1e5 弧度量级，
+// float 只有 24 位尾数，在那个量级上的角度精度只有千分之几弧度，而且误差随 k
+// 线性增长 —— 越往后波形越抖，听感就是"一直发毛"。前面几轮基于测试音的判断
+// 可能都被这个误差污染过。
+static int16_t g_sine[1024];
+
+static void sineInit() {
+  for (int i = 0; i < 1024; i++) {
+    g_sine[i] = (int16_t)lrintf(sinf(2.0f * (float)PI * (float)i / 1024.0f) * 32767.0f);
+  }
+}
+
+// 播放用的常驻缓冲（PSRAM，只分配一次）
+static int16_t* toneBufGet(size_t samples) {
+  static int16_t* buf = nullptr;
+  static size_t   cap = 0;
+  if (samples > cap) {
+    if (buf) heap_caps_free(buf);
+    cap = samples + 1024;
+    buf = (int16_t*)heap_caps_malloc(cap * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) { cap = 0; Serial.println("tone_buf=alloc_failed"); return nullptr; }
+  }
+  return buf;
+}
+
+// 纯音：整段波形先算完放进 PSRAM，再一次性交给播放任务。
+//
+// 相位用 32 位定点累加器（Q32）+ 1024 点查表，全程无浮点累积误差：
+//   step  = hz / fs × 2^32，每样本整数相加，溢出自然回绕，正好一个周期
+//   index = phase >> 22   （取高 10 位 → 0..1023）
+// 这样无论播 3 秒还是 30 秒，波形精度完全一致。
+//
+// 另外：旧版是"边算 sinf 边 playerFeed"，音频任务 15 ms 内取不到数据就会
+// underrun 写静音。现在播放期间主任务完全不参与，DMA 由缓冲直接供给。
+// 波形生成用的采样率。诊断时会临时改（playerSetRate），
+// 所以生成侧必须跟着变，否则同一 hz 参数听起来音高会变，对照就不成立。
+static uint32_t g_gen_rate = AUDIO_SAMPLE_RATE;
+
+static void playTone(uint16_t hz, uint16_t ms, int16_t amp) {
+  const uint32_t fs    = g_gen_rate;
+  const uint32_t total = fs * ms / 1000;
+  const uint32_t fade  = fs * 5 / 1000;    // 5 ms 淡入淡出
+  const uint32_t lead  = fs * 20 / 1000;   // 20 ms 前导静音
+
+  const size_t need = (size_t)lead + total + lead;
+  int16_t* b = toneBufGet(need);
+  if (!b) return;
+
+  memset(b, 0, (size_t)lead * 2);                       // 前导静音（同时避开功放上电咔声）
+  memset(b + lead + total, 0, (size_t)lead * 2);        // 尾部静音
+  int16_t* p = b + lead;
+
+  const uint32_t step  = (uint32_t)(((uint64_t)hz << 32) / fs);
+  const float    scale = (float)amp / 32767.0f;
+  uint32_t phase = 0;
+  for (uint32_t k = 0; k < total; k++) {
+    float env = 1.0f;
+    if (k < fade)               env = (float)k / (float)fade;
+    else if (k + fade >= total) env = (float)(total - k) / (float)fade;
+    int32_t s = (int32_t)g_sine[phase >> 22];
+    p[k] = (int16_t)((float)s * scale * env);
+    phase += step;
+  }
+
+  playerBegin();
+  playerFeed((const uint8_t*)b, need * 2);   // 一次性入队（远小于 32 KB 流缓冲）
+  playerEnd();
+  while (playerBusy()) delay(1);
+  Serial.printf("  -> underruns=%lu played=%lu/need=%u\n",
+                (unsigned long)playerUnderruns(),
+                (unsigned long)playerPlayedBytes(), (unsigned)(need * 2));
 }
 
 // ---------------- 本地回放（RECORD_ONLY 验证话筒/功放/喇叭/电源/引脚） ----------------
 #if APP_MODE == APP_MODE_RECORD_ONLY
+// 把录音原始 PCM 以 base64 从串口导出，供 PC 端做频谱分析（定位噪音来源）。
+// 只在 RECORD_ONLY 且 MIC_DUMP=1 时编译进去；正式版关掉。
+// 注意：一段 4.8 s 录音要传 205 KB base64，115200 波特率要 ~18 s，
+// 期间喇叭一声不出，很容易被误判成"卡死/没声音"。诊断完必须关掉。
+#define MIC_DUMP 0
+
+#if MIC_DUMP
+static const char B64T[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static void dumpB64(const uint8_t* p, size_t n) {
+  Serial.printf("DUMP %u\n", (unsigned)n);
+  char line[516];
+  size_t li = 0, i = 0;
+  while (i + 2 < n) {
+    uint32_t v = ((uint32_t)p[i] << 16) | ((uint32_t)p[i + 1] << 8) | p[i + 2];
+    line[li++] = B64T[(v >> 18) & 63];
+    line[li++] = B64T[(v >> 12) & 63];
+    line[li++] = B64T[(v >> 6) & 63];
+    line[li++] = B64T[v & 63];
+    i += 3;
+    if (li >= 512) { line[li] = 0; Serial.println(line); li = 0; }
+  }
+  size_t rem = n - i;
+  if (rem) {
+    uint32_t v = (uint32_t)p[i] << 16;
+    if (rem == 2) v |= (uint32_t)p[i + 1] << 8;
+    line[li++] = B64T[(v >> 18) & 63];
+    line[li++] = B64T[(v >> 12) & 63];
+    line[li++] = (rem == 2) ? B64T[(v >> 6) & 63] : '=';
+    line[li++] = '=';
+  }
+  if (li) { line[li] = 0; Serial.println(line); }
+  Serial.flush();
+  Serial.println("DUMPEND");
+}
+#endif
+
 static void localPlayback(const uint8_t* pcm, size_t n) {
   uint32_t t0 = millis();
   playerBegin();
@@ -188,7 +331,9 @@ void setup() {
   Serial.printf("\nvoice_terminal skeleton mode=%d (0=RECORD_ONLY 1=TURN 2=TURN_STOP)\n",
                 (int)APP_MODE);
 
-  if (!psramFound()) {   // 没有 PSRAM 就停住，不静默用内部 RAM
+  // 不用 psramFound()：本板（core 3.3.12 + OPI PSRAM）该标志恒为 false，
+  // 但 PSRAM 实际可用（esp_psram_is_initialized()=1、容量 8MB），故直接读 IDF 层真实容量。
+  if (esp_psram_get_size() == 0) {   // 没有 PSRAM 就停住，不静默用内部 RAM
     Serial.println("FATAL: PSRAM not found. Check board settings: ESP32S3 Dev Module / OPI PSRAM.");
     for (;;) delay(1000);
   }
@@ -198,11 +343,13 @@ void setup() {
     for (;;) delay(1000);
   }
   Serial.printf("rec_buf=%uB psram_free=%u\n",
-                (unsigned)REC_BUF_BYTES, (unsigned)ESP.getFreePsram());
+                (unsigned)REC_BUF_BYTES,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
   pinMode(PIN_BUTTON, INPUT_PULLUP);   // BOOT 低有效；复位时不要按住
   audioInit();
-
+  sineInit();          // 1024 点正弦表，playTone 查表用（一次算好，之后零浮点累积）
+  delay(200);
 #if APP_MODE == APP_MODE_TURN_STOP
   httpSetAbortPoll(abortPoll);
 #endif
@@ -220,6 +367,7 @@ void loop() {
       if (!down) s_waitRelease = false;
       if (down && !s_waitRelease) {   // 按住 BOOT 开始录音
         s_waitRelease = true;         // 防止 RECORD_ONLY/错误早退后按住键重复触发
+        playTone(1000, 60, 4000);     // "嘀" = 开始录音（电平压低，减少被话筒拾取）
         s_state = ST_RECORDING;
         logState("RECORDING");
       }
@@ -231,6 +379,17 @@ void loop() {
       uint32_t rec_ms = 0;
       size_t pcm_bytes = recordClip(&rec_ms);
       if (pcm_bytes == 0) {
+        s_state = ST_IDLE;
+        logState("IDLE");
+        break;
+      }
+      // 整段后处理：去直流 + 250~3800Hz 带通 + 降噪门 + 归一化。
+      // 必须在播放/上传之前，播放侧只做安全限幅。
+#if APP_MODE == APP_MODE_RECORD_ONLY && MIC_DUMP
+      dumpB64(s_rec, pcm_bytes);   // 先把未处理的原始 PCM 导出去做频谱分析
+#endif
+      if (!clipEnhance((int16_t*)s_rec, pcm_bytes / 2)) {
+        // 没录到人声：不放噪音、不上传
         s_state = ST_IDLE;
         logState("IDLE");
         break;

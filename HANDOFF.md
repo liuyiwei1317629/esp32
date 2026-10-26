@@ -1,9 +1,18 @@
 # 语音陪伴项目 · 最终交接（2026-10-23）
 
 > 读者：接手本项目的 AI，或未来的自己。先读第 2 节「硬约束」和第 3 节「接口契约」。  
-> 硬件到货：直接按 `handoff/G-hardware-bringup.md` 走检查点；默认路径不需要再改代码。  
+> 硬件最新状态看 `HANDOVER-G.md`（2026-10-26 定稿 + 2026-10-27 联网补记）。  
+> **2026-10-27：联网两模式（TURN / TURN_STOP）已上机验证**，看文首的状态更新。
 > 文件清单：第 13 节；维护、修改、扩展：第 14 节。  
 > 本文不含密钥、token、完整会话记录；不要把任何密钥或录音内容补进来。
+
+## 2026-10-27 状态更新（优先于下文）
+
+- **硬件已接线上电**：2026-10-26 本地录放链路定稿可用（无沙沙、响度一致、无破音），快照 `firmware/voice_terminal/snapshots/2026-10-26_final-v3/`，参数 `CLIP_TARGET_RMS=2700` / `CLIP_GAIN_MAX=8.0`。**联网两模式 2026-10-27 已上机验证**：TURN 多轮 `result=ok`、`first_pcm_ms` 2.2–4.2 s；TURN_STOP 播放中按 BOOT 打断 `stop_ms=20/18`、`result=aborted`（本地先静音再 POST `/stop`）。当前烧的是 `APP_MODE_TURN_STOP`；打断只在出声后生效（用户当天确认）。硬件事实以 `HANDOVER-G.md` 为准。
+- **2026-10-27 上机时改掉两处**：① 删掉开机 6 声诊断音阶（连同 `playDC`/`playSweep` 死代码），只留录音开始那声 60 ms「嘀」——删之前录音全零、删之后 `voice=1`，属经验事实、机制未查清；② 播放缓冲 1 s → 3 s（`PLAY_STREAM_BYTES_MAX=98304`，不够时自动降 2 s / 1 s），长回复断续从中后段大面积补静音缩到只在开头约 1 秒，残余根因是 bridge 按句合成的节奏。
+- **固件工作区改动来自硬件会话，未提交**：`firmware/README.md`、`audio_io.cpp/.h`、`config.h`、`voice_terminal.ino`；未跟踪 `HANDOVER-G.md`、`NEXT-AI.md`、`snapshots/`。不要回滚或覆盖。
+- **屏幕 + 充电宝仅规划，未采购、未实现**；模块是自带 USB 线的成品音箱板，只有一根 USB（红 5V / 黑 GND），没有 VCC/GND 杜邦针。
+- **当前供电全部来自电脑**；充电宝/独立电源方案未执行。
 
 ## 0. 一句话
 
@@ -17,16 +26,16 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | 五层记忆阶段 1（纯模块） | 已完成、已验收（148 例） |
 | 五层记忆阶段 2（只读接入） | 已完成、已验收（集成 16 例）；默认关闭，不写盘 |
 | 五层记忆阶段 3（写路径 dry-run） | 已完成、已验收；阶段 3 当时 writer 18 例、记忆 185 例；默认 `MEMORY_DRY_RUN=1`，不落盘 |
-| 五层记忆阶段 4（维护 / 可观测性 / 退出补刷） | **代码已完成并验收（2026-10-23）**；默认仍 dry-run，真实 `~/.voice-ai/memory/` 写入待用户确认 |
+| 五层记忆阶段 4（维护 / 可观测性 / 退出补刷） | **已完成并验收（2026-10-23）**；真实 `~/.voice-ai/memory/` 已于同日晚启用（`start-bridge.cmd`，两轮写入验证） |
 | C 规则命令 | **已接入（2026-10-23）**；stop/time/timer 本地短路，不调用 LLM；timer 只说明无法到点提醒 |
 | B 上下文模块 | 已交付（63 例），**未接入**；语音链路使用 `memory_context.py`，不要重复接两套 |
-| F 固件 | 三模式编译通过，**未上机** |
-| G 硬件 | 截至本文写作**未收到到货确认**；模块预计 2026-10-23、电源线预计 2026-10-25 |
+| F 固件 | 2026-10-22 三模式编译通过；2026-10-26 硬件实测后以 `RECORD_ONLY` 定稿；**2026-10-27 TURN / TURN_STOP 上机验证通过**（多轮 `result=ok`、打断 `stop_ms` 18–20 ms），同日删开机音阶与死代码、播放缓冲 1 s→3 s |
+| G 硬件 | **2026-10-26 已接线上电，本地录放定稿可用；2026-10-27 联网链路已通**；细节以 `HANDOVER-G.md` 为准 |
 
 当前两条主线，互不阻塞：
 
 1. **硬件 bring-up**：按 `handoff/G-hardware-bringup.md` 从断电测量走到 `/stop`。
-2. **记忆写路径**：阶段 3 dry-run 与阶段 4 接线均已完成；真实目录写入前先备份并取得用户确认，不允许跳过 dry-run。
+2. **记忆写路径**：阶段 3/4 已完成，真实目录已于 2026-10-23 启用（启用前目录不存在，无需备份）；日常用 `start-bridge.cmd` 启动，直接跑 `server.py` 仍是关闭 + dry-run。
 
 ## 1. 现状
 
@@ -45,33 +54,43 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
   - 未做（阶段 2 范围明确排除）：`mark_used`、写队列、`recent_cache`、摘要落盘、抽取、维护、真实积累。**因此阶段 2 的 `hits` 永远是种子值，晋升不会发生。**
 - **五层记忆阶段 3 已验收（2026-10-23，dry-run）**：新增 `memory_writer.py`（不可变 `WriteJob`、`RecentCache`、单 worker 队列）与 `test_memory_writer.py`（18 例）；`config.py` 新增 `MEMORY_DRY_RUN=1` / `MEMORY_DEBUG=0`；`pipeline.py` 增加 `Turn.selected_ids` 并把 `recent_cache` 传入读路径；`server.py` 在终块前 `enqueue_memory()`，`run_local`/`record_mic` 同入口。
   - 资格：完整、无 error、非 `length`、`done` 或 `stop`、user/reply 非空；敏感回合（user+assistant）同步拒绝且不进入 `recent_cache`；队列满丢弃，不影响回复。
-  - **默认 dry-run 不落盘**：不写 facts/episodes/sessions、不调 `mark_used`，只累计 `dry_run_*`/`hits_deferred`；`recent_cache` 仍在进程内影响下一轮 prompt。真实写入需显式 `MEMORY_DRY_RUN=0`（阶段 4 已在临时目录验收，真实目录仍待确认），且 `store.read_only` 时强制 dry-run。
+  - **默认 dry-run 不落盘**：不写 facts/episodes/sessions、不调 `mark_used`，只累计 `dry_run_*`/`hits_deferred`；`recent_cache` 仍在进程内影响下一轮 prompt。真实写入需显式 `MEMORY_DRY_RUN=0`（阶段 4 已在临时目录验收；真实目录已于 2026-10-23 启用，见 §1.1），且 `store.read_only` 时强制 dry-run。
   - 真实写入模式下命中每 5 个完成回合批量 `mark_used` 并只落盘一次，`stop()` 补刷；**维护在阶段 3 未接线**（阶段 4 已接线，见下一条）。
   - 测试证据（阶段 3 当时）：记忆 **185 例全过**（148 + 19 集成 + 18 writer）；hermetic 20 模块 **340 例**；脚本 22/22。集成新增“终块前 cache 可见 + 下一轮读到新记忆”“dry-run 零落盘”“敏感回合零缓存零落盘”。
-- **五层记忆阶段 4 已验收（2026-10-23，默认仍 dry-run）**：维护接线、读路径 debug、退出补刷完成；只在临时目录做真实写入验收，**未创建/未写入 `~/.voice-ai/memory/`**。
+- **五层记忆阶段 4 已验收（2026-10-23，默认仍 dry-run）**：维护接线、读路径 debug、退出补刷完成；只在临时目录做真实写入验收，**阶段 4 当时未创建/未写入 `~/.voice-ai/memory/`**（同日晚已启用，见 §1.1）。
   - `MemoryWriter(..., maintenance=MemoryMaintenance(store))`：启动从 `state["turns_since_maintenance"]` 恢复增量计数；真实写入模式下启动评估一次，每个成功写盘回合 +1 后调 `maybe_run(completed_turns=count)`，维护运行后归零。计数器是“距上次维护新增回合”，不是会话累计；重启后仍能按 50 回合节流。
   - dry-run 与 `store.read_only` **完全不调用维护**（`maybe_run` 未到期时也会保存 state，dry-run 必须避开这次写盘）；维护异常只计数 `maintenance_errors`，不阻塞写盘与回复。
   - `MEMORY_DEBUG=1` 时读路径打印 `memory: L1=... L2=... L3=... L4=... total=x/budget trimmed=... current=... warnings=...`，只含计数，不含记忆/用户原文；`memory_debug.jsonl` 未实现。
   - 退出补刷：`serve()` 在 `finally` 调 `writer.stop()` 并 `server_close()`（Ctrl+C 也走）；`run_local`/`record_mic` 入队后停止 writer，真实模式会补刷命中。
   - 测试证据：writer **25/25**、集成 **22/22**、记忆 **195 例**；hermetic 20 模块 **350 例**；脚本 22/22。临时目录 3 回合真实写入生成 facts/episodes/sessions/state，`written_jobs=3`、`maintenance_runs=1`、`turns_since_maintenance=3`，真实目录仍不存在。
-  - 未做：真实目录启用（待确认 + 备份）、`memory_debug.jsonl`、`MEMORY_LLM`/`memory_usage.jsonl`、p95 自动回归门。
-- **五层记忆阶段 5 已完成（2026-10-23，读路径与缓存上限）**：`active_facts()`/`active_episodes()` 改为只读投影（只复制顶层字段，调用方不得修改嵌套 `history`），`facts()`/`episodes()` 仍深拷贝供维护/管理；`MemoryStore(max_sessions=64)`、`RecentCache(max_sessions=64)`、`MemoryWriter(seen_gen_limit=8192)` 加界（LRU/FIFO）。本机 500 条复测 `active_episodes` p50 3.90→0.10 ms、`build_for_turn` p50 5.72→1.93 ms / p95 6.22→2.06 ms。阶段 5 当时记忆 **200 例**、hermetic **355 例**、脚本 22/22；C 接入后的当前计数见下一条测试环境。未改 `config.py`/`server.py`/`pipeline.py`/`memory_context.py`/固件，默认开关未动，真实目录仍未创建。
+  - 未做：`memory_debug.jsonl`、`MEMORY_LLM`/`memory_usage.jsonl`、p95 自动回归门（真实目录启用已于 2026-10-23 完成，见 §1.1）。
+- **五层记忆阶段 5 已完成（2026-10-23，读路径与缓存上限）**：`active_facts()`/`active_episodes()` 改为只读投影（只复制顶层字段，调用方不得修改嵌套 `history`），`facts()`/`episodes()` 仍深拷贝供维护/管理；`MemoryStore(max_sessions=64)`、`RecentCache(max_sessions=64)`、`MemoryWriter(seen_gen_limit=8192)` 加界（LRU/FIFO）。本机 500 条复测 `active_episodes` p50 3.90→0.10 ms、`build_for_turn` p50 5.72→1.93 ms / p95 6.22→2.06 ms。阶段 5 当时记忆 **200 例**、hermetic **355 例**、脚本 22/22；C 接入后的当前计数见下一条测试环境。未改 `config.py`/`server.py`/`pipeline.py`/`memory_context.py`/固件，默认开关未动；阶段 5 当时真实目录仍未创建（现已启用，见 §1.1）。
 - **C 已接入，B 保持归档**：`bridge/commands.py`（54 例）+ `bridge/local_commands.py`（13 例）已接入 `pipeline.Turn`；`turn.local_command` 非空时跳过 LLM、记忆读写与用量账本。`context_builder.py`（63 例）仍不接入，语音链路使用 `memory_context.py`，不要为了“接 B”再改一次消息组装。
+- **本地应急兜底已接入（2026-10-23，默认关闭）**：`bridge/local_plugin.py` 走 Ollama OpenAI 兼容 `/chat/completions`，固定功能 prompt，不带人格、不带记忆；只在所有云端 profile 失败且本轮未出字时由 `pipeline.Turn` 调用，已出字不混脑；本地也失败则念固定句「云端暂时连不上，我现在只能做简单的事。」。本地回合跳过记忆写入；账本记 `profile=local`、`cost_cny=null`。默认 `LOCAL_PLUGIN_ENABLED=0`。真实冒烟冷加载 7.53 s、41 字、无 reasoning 泄漏，`keep_alive:0` 后 `ollama ps` 为空、显存回 33 MiB。
+- **五层记忆真实目录已启用（2026-10-23 05:42）**：启用前 `~/.voice-ai/memory/` 不存在，因此没有历史数据需要备份。用 `MEMORY_ENABLED=1 MEMORY_DRY_RUN=0` + `--file bridge/out/in_16k.wav --no-cosyvoice`（CPU ASR + edge，不占 GPU）连跑两轮真实回合：第一轮创建 `sessions/939bb46a04c3640c.json`（completed=1）与 `state.json`；第二轮读路径出现 `L2=26`、`L4=1`，确认能取到上一轮摘要。该轮普通陈述句不匹配事实规则（`记住…`/`我叫…`/`我喜欢…` 等），所以 `facts`/`episodes` 仍为空，属抽取规则设计而非故障。此后日常入口是项目根 `start-bridge.cmd`（设两个记忆环境变量后启 `server.py`；直接运行 `server.py` 仍是默认关闭 + dry-run）。启动时会打印一行 `memory: disabled` 或 `memory: enabled dir=... dry_run=...`，可直接确认本次是否真实写入。
 - **F 已静态交付并完成编译验证（2026-10-22）**：`firmware/voice_terminal/` 7 个源码/配置 + `firmware/README.md` + `.gitignore`。引脚 4/5/6/15/16/7/0；WAV 44 字节头与 `Content-Length=44+pcm`；`X-Voice: s16le/16000/mono`、chunked/204/401、`/stop` 与 bridge 契约一致；默认两路独立 I2S，24-bit 方案 B 会打印 raw/s16 min/max/RMS。
   - 三模式编译通过（arduino-cli 1.5.1 + `esp32:esp32@3.3.12`，FQBN `esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=default,CDCOnBoot=default`）：
     - RECORD_ONLY：377,943 B（28% flash）/ 29,636 B（9% RAM）
     - TURN：935,654 B（71%）/ 48,756 B（14%）
     - TURN_STOP：935,838 B（71%）/ 48,756 B（14%）
-  - `--warnings all` 下自有文件 0 warning；`compile_commands.json` 确认 `-DAPP_MODE=1/2` 生效。**编译通过不等于能跑**：未烧录、未接话筒/功放。
+  - 2026-10-27 在 10-26 音频重写后重新编译：RECORD_ONLY 385,819 B（29%）/ 52,196 B（15%）、TURN 943,602 B（71%）/ 71,316 B（21%）、TURN_STOP 943,782 B（72%）/ 71,316 B（21%），0 error；当时自有文件只剩 `playSweep`/`playDC` 两条未使用告警。
+  - 2026-10-27 收尾清理后重编：RECORD_ONLY 397,319 B（30%）/ 52,316 B（15%）、TURN 943,302 B（71%）/ 71,316 B（21%）、TURN_STOP 943,486 B（71%）/ 71,316 B（21%），**0 error / 0 warning**（删掉了 `playDC`/`playSweep` 与全部临时诊断打印）。
+  - `--warnings all` 下自有文件 0 warning；`compile_commands.json` 确认 `-DAPP_MODE=1/2` 生效。2026-10-26 上机完成本地录放，**2026-10-27 联网两模式上机验证通过**（见 §1.2 开头）。
   - 2026-10-22 复审后修了 6 处：`s_waitRelease` 重复触发、播放排空 abort 卡死、`/stop` 先本地 flush、排空阶段可打断、上传提前响应/超时、`MIC_AMP_SHARED_CLOCKS=1` 编译守卫。单总线路径仍未实现，只是被禁止。
-- **测试环境口径**：脚本自检 23/23（sentence_split 8、llm 9、pipeline 6）。**单元回归必须用显式模块清单**：17 个 unittest 模块共 **371 例全过**，其中记忆 202 例；加上 3 个脚本自检，hermetic 合计 **20 个测试文件、394 例**。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
+- **测试环境口径**：脚本自检 27/27（sentence_split 8、llm 9、pipeline 10）。**单元回归必须用显式模块清单**：18 个 unittest 模块共 **379 例全过**，其中记忆 204 例；加上 3 个脚本自检，hermetic 合计 **21 个测试文件、406 例**。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
 - 性能基线（以 `bridge/README.md` 实测节为准）：首字节常见 2.4–5.3 s；首句 6–8 字；CosyVoice 快态 125–215 ms/字，慢态可到 300–558 ms/字，重启后恢复；DeepSeek TTFT 0.1–1.0 s；ASR 在 CPU 上约 0.2–0.5 s。
 - `~/.deepseek/key` 与 `~/.deepseek/bridge_token` 已配置；只能确认存在，不要读取或打印内容。
 - 根 `README.md` 与 `bridge/README.md` 的「云端为主 + 本地功能插件」节已同步；记忆与固件的最终口径以本文和 `bridge/README.md` 记忆节为准。
 
 ### 1.2 还差什么（按优先级）
 
-**P0 · 硬件上机（唯一能证明设备可用的路径）**
+**P0 · 硬件联网（已完成 2026-10-27）**
+
+> 2026-10-27 结果：TURN 多轮 `result=ok`（`first_pcm_ms` 2.2–4.2 s；整轮墙钟 5–61 s）。**日志字段名有歧义，读的时候别望文生义**：串口的 `upload_ms` 实际是**整轮墙钟**（上传+等待+播放+排空，`millis()-t0`），`play_ms` 是**回复音频时长**（`pcm_bytes/32`，不是播放耗时）。bridge 侧识别正常；TURN_STOP 播放中按 BOOT 打断两次 `stop_ms=20/18`、`result=aborted`，本地先静音再 `POST /stop`。等待首字节期间按键按设计不响应。
+>
+> 上机时改了两处：① **删掉开机 6 声诊断音阶**（连同注释与死代码 `playDC`/`playSweep`），删之前 4 次录音全零、删之后每次 `voice=1`——**经验事实，机制未查清**；② **播放缓冲 1 s → 3 s**，长回复断续从中后段大面积补静音缩到只剩零星缺口——干净版实测 55.7 s 回复 `underruns=46`（≈1.47 s 静音、2.6%），修之前 7.1 s 回复就有 59 次（≈1.89 s、27%）。残余在回复开头几秒，根源是 bridge 按句合成（`CHUNK_BYTES=4096`，句间合成停顿 1.1–5.6 s）；**再压只能动 bridge / 加播放起始水位换延迟，先找 bb96**。
+>
+> 下面 1–6 是 2026-10-26 初始上机的历史记录，保留备查。
 
 1. 到货确认、开箱照片、N16R8/模块 5 V 丝印核对。
 2. 断电测 VCC–GND 短路、`SCK↔BCLK`、`WS↔LRCLK`、喇叭阻抗/对地。
@@ -80,13 +99,13 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 5. 实测 24-bit 转换（`MIC_SHIFT`）、VAD 阈值（`REC_SILENCE_RMS`）、160 ms 预缓冲/underrun、按键打断时序。
 6. 记录首字节、桥端 `FIRST_AUDIO_MS`、`/stop` 静音延迟。
 
-**P0 · 记忆真实写入（阶段 4 代码已完成，剩上线启用）**
+**P0 · 记忆真实写入（已完成 2026-10-23）**
 
-- 阶段 4 已接线维护、读路径 debug、退出补刷，并在临时目录完成 `MEMORY_DRY_RUN=0` 真实写入验收；**默认仍是 `MEMORY_DRY_RUN=1`，真实链路仍不落盘**。
+- 阶段 4 已接线维护、读路径 debug、退出补刷，并在临时目录完成 `MEMORY_DRY_RUN=0` 真实写入验收；**真实目录已于 2026-10-23 用 `start-bridge.cmd` 启用并完成两轮写入/读取验证**。代码默认仍是关闭 + dry-run（避免测试与实跑脚本污染真实档案）。
 - dry-run 下 `recent_cache` 只在本进程内影响下一轮 prompt；摘要/事实/待办不会积累，`hits` 不增长，“注入 3 次晋升”不会触发。
 - 维护代码已可用：真实写入模式下启动/每 24 h/每 50 个完成回合触发晋升、降级、容量清理；dry-run 下不调用（避免写 state）。`memory_debug.jsonl` 仍未实现，`MEMORY_DEBUG=1` 只打 stdout 计数。
-- 剩余动作：备份 `~/.voice-ai/memory/` 后设 `MEMORY_DRY_RUN=0`，先在临时目录外做一次真实启动检查，再切到真实目录；**需用户确认**，不允许跳过 dry-run。
-- 记忆目前仍是“只读种子库 + 进程内最近两轮”，不是可用的长期记忆。**这是当前软件侧最大的功能缺口。**
+- 已完成：真实目录启用、两轮写入/读取验证（2026-10-23）。后续维护前先备份 `~/.voice-ai/memory/`；删除走 `memory_admin.py`，不要手删 JSONL。
+- 记住：事实/情节是规则抽取，只有「记住…」「我叫…」「我喜欢…」等句式才会进 `facts`；普通聊天只更新会话摘要与最近轮次，这不是漏写。
 
 **规则命令（C，已完成）**
 
@@ -111,8 +130,8 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 
 **P1 · 本地兜底**
 
-- 没有本地对话脑；PC 关机、断网或云端不可用时，设备只能播放错误提示，不能继续对话。
-- 本地功能插件模型（Qwen3.5-2B Q4_K_M）未下载、未接入；先完成硬件和记忆写路径，不要提前占显存。
+- 已有本地应急兜底，但**默认关闭**且只做简单问答：Ollama 未启动、超时或空正文时只念固定句；不承载人格与长期记忆。打开前先启动 Ollama；PC 关机仍然完全不可用。
+- 模型在 C: NVMe（`C:\Users\DELL\.ollama\models`），冷加载约 5.7 s、显存 2.36 GB；`keep_alive:0` 每轮卸载。`D:\ollama\models` 旧副本已于 2026-10-23 经用户确认删除；`D:\ollama\ollama-windows-amd64.zip`（1.58 GB）仍在。
 
 **P2 · 未来升级（顺序不可跳）**
 
@@ -122,6 +141,16 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 4. 唤醒词（最后）。
 - UDP 只是局域网优化项，不是 MVP 前置条件。
 - 多设备前要先做 `/stop` 的 session 作用域；当前是全局打断。
+
+**P2 · 屏幕与便携供电（2026-10-27 记录，未采购、未实现）**
+
+- 屏幕走 SPI：首选 3.3V 逻辑的 1.28 寸 GC9A01 圆屏（240×240）或 ST7789 方屏；6 线 SCLK/MOSI/CS/DC/RST/BL 接 GPIO 8–14，RST 避开 GPIO0（按键）；不要 RGB 并口屏；屏从板子 3.3V 取电。
+- 电源拓扑（按现有模块修正）：模块只有自带 USB 线（红 5V / 黑 GND，**没有 VCC/GND 针**），所以充电宝必须**同时**给模块 USB 与板子 USB 供电，且两路来自**同一个充电宝**或同一个 USB hub。两个独立电源会失去公共地，I2S 会噪声或无声。
+- 充电宝：5V/2A 以上、10000mAh 起、**必须带“小电流模式”**，否则待机时会被判空断电；**只用 5V USB-A 输出**，避免多档快充误升 9V/12V 烧 MAX98357A。10000mAh 约 10–15 小时、20000mAh 约 20–30 小时（粗估）。
+- 地回路：继续用短 USB 线，模块和板子同 hub / 同充电宝——这是 2026-10-26 把沙沙调干净的关键；不要拆回“两个独立电源”。优先选双 USB-A 口的充电宝；只有一个口就用能带 2A 的 hub。
+- 上电前：万用表确认充电宝两个 USB 口的 GND 导通、5V 对地 5.0–5.2 V，再接模块和板子。
+- 屏线/背光远离话筒模拟线；显示是本地功能，不改 bridge 契约；用独立 UI 任务，不阻塞音频；8MB PSRAM 够帧缓冲。
+- 等联网跑通后再定型号；当前不采购、不改固件、不接线。
 
 **P2 · 记忆质量与隐私**
 
@@ -135,7 +164,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 
 - 系统 Python 缺 `funasr`，导入 `test_e2e.py` / `test_live.py` 会失败；`.venv` 才有 ASR 依赖。**不要用裸 `unittest discover`**：这两个是 import 即执行的脚本。`test_e2e.py` 按 G 手册 §4 的空 token 环境跑（真 ASR/edge，不占 GPU）；`test_live.py` 会花真实 API、启动 CosyVoice 占 GPU 并写账本，**没有明确授权不要跑**。
 
-### 1.3 硬件状态（截至 2026-10-23）
+### 1.3 硬件状态（历史：截至 2026-10-23；当前见顶部更新与 `HANDOVER-G.md`）
 
 | 件 | 价格 | 状态 |
 |---|---:|---|
@@ -167,7 +196,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - B/C 的测试**只用标准库**，不联网、不调用模型、不读写密钥、不占 GPU。
 - F 的代码不得包含真实 Wi-Fi 密码、bridge_token、API key；只放 `secrets.example.h` 占位符。
 - G 不改 bridge、不改防火墙（8080 入站归 bb96）、不采购、不跑 GPU；先征得用户同意再装驱动或工具链。
-- 记忆阶段 3/4 默认 dry-run，不写 `~/.voice-ai/memory/`；真实目录启用前先备份，再设 `MEMORY_DRY_RUN=0`，并取得用户确认。
+- 记忆阶段 3/4 默认 dry-run；真实目录已于 2026-10-23 启用（`start-bridge.cmd`）。改记忆或删数据前先备份；不要把 `config.py` 的默认值改成开启。
 
 ## 3. 接口契约（不要改）
 
@@ -185,7 +214,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | 起始水位 | 设备端先缓冲 150–200 ms PCM 再开 I2S，避免 underrun（固件当前 160 ms） |
 | 打断语义 | 设备收到 `/stop` 或本地按键后**本地 flush**；服务端可能还在等当前句合成完，连接晚关几秒不是可听延迟 |
 | 切脑 | 一旦向 TTS 送出内容，不在回复中途切换；下一轮再切 |
-| 记忆 | 不新增端点/字段；写路径默认 dry-run；当前响应头 `X-Session-Id` 仍是 `d=dev1`，待 bb96 决定是否修 |
+| 记忆 | 不新增端点/字段；写路径由客户端启动开关控制（`start-bridge.cmd` 开启，代码默认 dry-run）；当前响应头 `X-Session-Id` 仍是 `d=dev1`，待 bb96 决定是否修 |
 
 `/turn` 的处理顺序是：读 WAV → SenseVoice → 云端 LLM 流式 → 切句 → TTS → chunked PCM。云端 TTFT 不是主要瓶颈，首句字数 × 合成速度才是。
 
@@ -209,7 +238,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | F 包 | 新建 `firmware/**` | `bridge/**` 与其他已有文件 |
 | G 包 | 只读、测量、报告；日志放对话里 | 不改代码、不改防火墙、不采购 |
 
-**注意**：上表只是分工，不是改码许可。A/D、记忆阶段 1–5、C 集成已获用户明确授权并完成；E 仍需 GPU 授权与范围确认。记忆阶段 4 的真实目录启用（备份 + `MEMORY_DRY_RUN=0`）仍需用户单独确认。
+**注意**：上表只是分工，不是改码许可。A/D、记忆阶段 1–5、C 集成已获用户明确授权并完成；E 仍需 GPU 授权与范围确认。记忆真实目录已于 2026-10-23 经用户确认启用。
 
 `bridge/out/` 里有真人录音和合成音频，属于个人数据；不要上传、不要贴进公开仓库。
 
@@ -222,7 +251,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 5. **硬件 bring-up（与 6 可并行）**：按 G 手册；这是唯一能证明设备可用的路径。
 6. **C 集成（已完成 2026-10-23）**：先修否定误判，再定 `stop`/`time`/`timer` 的本地执行语义；`timer` 只确认、不假装会主动提醒。
 7. **记忆阶段 3（已完成 2026-10-23）**：`memory_writer.py` + 不可变 `WriteJob` + `recent_cache` + 敏感预检 + dry-run + `mark_used` 批量刷；默认不落盘。
-8. **记忆阶段 4（代码已完成 2026-10-23）**：维护接线、读路径 debug、退出补刷；临时目录真实写入验收。真实目录启用需备份 + 用户确认后再设 `MEMORY_DRY_RUN=0`。
+8. **记忆阶段 4（已完成 2026-10-23）**：维护接线、读路径 debug、退出补刷；临时目录真实写入验收；同日晚真实目录启用并完成两轮验证。
 9. **E（需 GPU 授权）**：LLM 等待窗口预热 CosyVoice；不与任何 GPU 任务并行。
 10. **未来**：WebSocket → 设备端 VAD/AEC → 唤醒词；顺序见 6.1。
 11. **B**：保留为参考/归档；语音链路已由 `memory_context.py` 覆盖，**不要重复接入**。
@@ -255,7 +284,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 |---|---|---|---|
 | B 上下文/记忆 | Qwen3.8-Flash 思考中（0.65x） | DeepSeek V4.1 Flash max（夜间 0.11x） | 已交付 63 例；未接入，作为归档 |
 | C 规则命令 | DeepSeek V4.1 Flash max | 单测裁决 | 已交付 54 例 + 本地回复 13 例；**2026-10-23 已接入** |
-| F 固件骨架 | Qwen3.8-Flash 极致（1.20x） | DeepSeek V4.1 Flash max | 已交付并三模式编译；待上机 |
+| F 固件骨架 | Qwen3.8-Flash 极致（1.20x） | DeepSeek V4.1 Flash max | 已交付；2026-10-26 以 `RECORD_ONLY` 定稿，联网待验证 |
 | G 硬件调试 | Qwen3.8-Flash 思考中，且必须能读图 | 用户照片 + 本会话复核 | 使用 `handoff/G-hardware-bringup.md` |
 
 - 倍率只代表价格，不代表能力；以上按任务风险分配。
@@ -280,7 +309,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - 默认 deepseek 用高峰价 2 / 8 保守估算；空闲/缓存命中会更低，所以账本高于实际账单，不是账单本身。
 - 记录发生在响应终止块之前；账本写入失败只打印 WARN，不打断音频返回。fake LLM 的 `test_e2e.py` 没有 profile，不会写账本。
 
-### 五层记忆（阶段 1/2/3 已实现，默认关闭 + dry-run）
+### 五层记忆（阶段 1–5 已实现；真实目录已启用，代码默认关闭 + dry-run）
 
 - 实际入口：
   ```python
@@ -296,9 +325,9 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - `pipeline.Turn` 在 `MEMORY_ENABLED=1` 且 `bridge.memory_store` 存在时走上述入口；异常或 `info["fallback"]` 时回退 `[system persona, user text]`。实际注入的 id 存入 `turn.selected_ids`。
 - `Bridge(tts, memory_store=None, token_cache=None, memory_writer=None)`；`Bridge.begin(..., session_id="anon")`。
 - `server.build_bridge()` 只在启用时构造 `MemoryStore`、`TokenCache` 与 `MemoryWriter`；`/turn`、`run_local`、`record_mic` 在启用时传解析后的 session，关闭时保持旧两参数调用。
-- 阶段 2 不写盘；**阶段 3/4 默认 dry-run 也不写盘**：不写 facts/episodes/sessions、不调 `mark_used`、不跑维护，`recent_cache` 只在进程内影响下一轮 prompt。
+- 代码默认（直接跑 `server.py`）仍是关闭 + dry-run：不构造 writer，不写 facts/episodes/sessions。**真实写入只在 `start-bridge.cmd` 下发生**（`MEMORY_ENABLED=1`、`MEMORY_DRY_RUN=0`），2026-10-23 已完成两轮真实写入/读取验证。
 - 写入入口是 `server.enqueue_memory(bridge, turn)`：`/turn` 在 PCM 循环后、终块前调用；`run_local`/`record_mic` 在 PCM 循环后调用，随后 `stop_memory(bridge)` 补刷。任何异常只打印 WARN。
-- 真实写入（`MEMORY_DRY_RUN=0` 且 store 非只读）才启用维护与命中落盘；`serve()` 退出时 `writer.stop()` + `server_close()`。**不要跳过 dry-run；真实目录启用前先备份并取得用户确认。**
+- 真实写入（`MEMORY_DRY_RUN=0` 且 store 非只读）才启用维护与命中落盘；`serve()` 退出时 `writer.stop()` + `server_close()`。真实目录启用前若无历史数据可直接启用；**已有数据后要改结构或清理，先备份 `~/.voice-ai/memory/`**。
 
 ### C · 规则命令（已接入 2026-10-23）
 
@@ -348,7 +377,7 @@ cd ..
 # 3) 现有 unittest（A/D/B/C；无网络、无 GPU）
 cd bridge
 ../.venv/Scripts/python.exe -m unittest -v test_brains test_brain_stream test_server_brain test_usage test_server_usage
-../.venv/Scripts/python.exe -m unittest -v test_context_builder test_commands test_local_commands
+../.venv/Scripts/python.exe -m unittest -v test_context_builder test_commands test_local_commands test_local_plugin
 cd ..
 ```
 
@@ -380,22 +409,22 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml com
 
 ## 10. 已知阻塞与风险
 
-1. **硬件未确认到货、固件未上机**：从未烧录、未接话筒/功放；硬件行为（PSRAM、I2S、24-bit 格式、供电）均未验证。不要把「编译通过」说成「能跑」。
-2. **记忆真实写入未打开**：阶段 3/4 默认 dry-run，不写记录、不调 `mark_used`、不维护。`hits` 停在种子值，晋升/降级/容量都不会发生；`recent_cache` 只在单进程内影响下一轮。当前不是可用的长期记忆，真实目录启用后才能真实积累。
+1. **硬件已上机（2026-10-26 录放、2026-10-27 联网）**：本地录放链路定稿；**TURN 多轮 `result=ok`、TURN_STOP 打断 `stop_ms=20/18` 已实机验证**。打断只在出声后生效（用户 2026-10-27 定）：等待首字节期间按 BOOT 无反应，也不发 `/stop`。遗留：长回复开头约 1 秒仍有静音缺口（bridge 按句合成的节奏，改它要动 bridge）；每轮一次 `NetworkClient setSocketOption fail on -1 errno 9`，不影响 `status=200`。
+2. **记忆只在专用启动脚本下生效**：`start-bridge.cmd` 设 `MEMORY_ENABLED=1`/`MEMORY_DRY_RUN=0`，真实目录已启用；直接运行 `server.py` 仍是关闭 + dry-run，不会积累。事实/情节只按固定句式抽取（「记住…」「我叫…」等），普通陈述只进会话摘要。`~/.voice-ai/memory/` 是明文，勿上传。
 3. **定时提醒无法主动出声**：现有 HTTP 是单向请求/响应；C 已能解析并本地回复，但到点主动出声还需要新通道。不要用睡眠线程 + 直接调用 TTS 糊过去，那会绕开设备播放路径。
 4. **本地命令覆盖有限**：只识别 stop/time/timer；`time` 依赖 PC 本地时钟；`timer` 只确认、不到点响（原因见第 3 条）。
 5. **B 与 memory_context 重复**：B 的 `context_builder` 未接入，语音链路用 `memory_context`；不要同时接两套。
 6. **测试环境分裂**：系统 Python 缺 `funasr`，`test_e2e`/`test_live` 导入失败；用 `.venv` 跑 ASR/e2e，不要把环境问题当回归。
-7. **24-bit 话筒格式未实测**：ICS43434 是 24-bit；固件假设左对齐、`MIC_SHIFT=16`，由 G 实测决定移位/位宽。不要静默猜一个移位。
-8. **两路 I2S 时钟是否内部相连未实测**：默认两路独立；若 `SCK↔BCLK`、`WS↔LRCLK` 导通，改单总线方案并先报告；不能把两个 GPIO 输出接到同一网络。`MIC_AMP_SHARED_CLOCKS=1` 当前会 `#error`，禁止误开。
+7. **24-bit 话筒格式已由 2026-10-26 实测确定**：录音链路正常（语音从 448 ms 开始、峰值 2600–4500、underruns=0）；当前移位/位宽以 `HANDOVER-G.md` 和 `config.h` 定稿值为准，不要再按旧假设改。
+8. **两路 I2S 时钟**：模块内部**没有共同时钟**（测过 7 组引脚全 open），按两路独立接；不要开 `MIC_AMP_SHARED_CLOCKS=1`（会 `#error`）。
 9. **CosyVoice 慢态**：长时间运行后可能从 125–215 ms/字掉到 300–558 ms/字；重启恢复，不要换引擎或改契约。
 10. **8080 入站防火墙归 bb96**：G 只验证，不改规则；连接失败先报告。
 11. **`X-Session-Id` 仍是 `d=dev1`**：`_session()` 历史 bug；记忆桶已独立解析，不影响读取，但修头值是可见契约变更，需 bb96 确认。
 12. **无硬性成本上限**：账本只是估算；没有自动停机。额度控制靠控制台。
 13. **首字节 2.4–5.3 s**：距 1.5–2 s 目标有差距；E 未做，首句字数和 TTS 速度是主因。
-14. **没有本地对话脑**：PC 关机/断网/云端不可用即无法对话；本地插件模型未下载。
+14. **本地兜底不是第二人格**：2B 应急模型已接入但默认关闭，只做简单问答、不写记忆；Ollama 未启动或 PC 关机时仍只能念固定句。
 15. **记忆明文与个人音频**：`~/.voice-ai/memory/` 是明文短句；`bridge/out/`、`test-data/` 有真人录音。不要上传、不要贴公开仓库。
-16. **git 基线已建立**：源码/文档/测试已入库并推送（`5d7c279`、`d9cda6b`）；`.gitignore` 已排除运行时、模型、音频、日志与 `secrets.h`。后续提交仍要逐项暂存，不要 `git add -A`。
+16. **git 基线已建立**：源码/文档/测试已入库并推送（`5d7c279`、`d9cda6b`）；`.gitignore` 已排除运行时、模型、音频、日志与 `secrets.h`。**2026-10-26 的硬件固件改动加 2026-10-27 上机修正（`audio_io.*`、`config.h`、`voice_terminal.ino`、`firmware/README.md`）和 10-23 的本地兜底改动仍未提交**；后续提交仍要逐项暂存，不要 `git add -A`。
 
 ## 11. 环境与路径
 
@@ -404,17 +433,21 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml com
 | 项目根 | `C:\Users\DELL\voice-ai` |
 | 桥接代码 | `C:\Users\DELL\voice-ai\bridge` |
 | ASR/TTS 环境 | `.venv`（Python 3.13.16）；CosyVoice worker 用 `py311`（Python 3.11.9） |
-| 主服务 | `.venv\Scripts\python.exe bridge\server.py --serve` |
+| 主服务（带记忆） | `start-bridge.cmd`（设 `MEMORY_ENABLED=1`/`MEMORY_DRY_RUN=0` 后跑 `server.py --serve`） |
+| 主服务（无记忆） | `.venv\Scripts\python.exe bridge\server.py --serve` |
 | 仅 edge（不占 GPU） | `.venv\Scripts\python.exe bridge\server.py --serve --no-cosyvoice` |
 | 局域网 | `192.168.0.100:8080` |
 | 密钥 | `~/.deepseek/key`（只确认存在，不读不打印） |
 | 设备 token | `~/.deepseek/bridge_token`（不下发、不贴出） |
 | 大脑配置 | `~/.voice-ai/brains.toml`（工作区外） |
 | 用量账本 | `~/.voice-ai/usage.jsonl`（真实轮次后生成；无原文/密钥） |
-| 记忆数据 | `~/.voice-ai/memory/`（工作区外；阶段 2 不创建/不写） |
-| 记忆开关 | `MEMORY_ENABLED=1`；`MEMORY_DIR`、`MEMORY_INPUT_BUDGET_TOKENS=1050`、`MEMORY_CURRENT_INPUT_MAX_CHARS=500` |
+| 记忆数据 | `~/.voice-ai/memory/`（工作区外；2026-10-23 已创建并写入） |
+| 记忆开关 | `start-bridge.cmd` 设 `MEMORY_ENABLED=1`、`MEMORY_DRY_RUN=0`；其它可调 `MEMORY_DIR`、`MEMORY_INPUT_BUDGET_TOKENS=1050`、`MEMORY_CURRENT_INPUT_MAX_CHARS=500`、`MEMORY_DEBUG=1` |
 | 日志 | `bridge/logs/`；音频 `bridge/out/`（个人数据，勿上传） |
-| 固件 | `C:\Users\DELL\voice-ai\firmware\`（三模式已编译，未上机） |
+| 本地插件运行时 | `D:\ollama\ollama.exe`（Ollama 0.40.8 便携版）；启动 `D:\ollama\start-ollama.cmd`，监听 `127.0.0.1:11434` |
+| 本地插件模型 | `C:\Users\DELL\.ollama\models\`，`qwen3.5:2b-q4_K_M`（1.9 GB；C: NVMe 冷加载约 5.7 s；D: 旧副本已删） |
+| 本地插件开关 | `LOCAL_PLUGIN_ENABLED=0`（默认）；`LOCAL_PLUGIN_MODEL`、`LOCAL_PLUGIN_MAX_TOKENS=160`、`LOCAL_PLUGIN_TIMEOUT_S=15` |
+| 固件 | `C:\Users\DELL\voice-ai\firmware\`（`RECORD_ONLY` 2026-10-26 定稿；TURN / TURN_STOP 2026-10-27 上机验证） |
 | 固件工具链 | `D:\arduino-cli\arduino-cli.exe` + `D:\Arduino15`（core 3.3.12），构建输出 `D:\arduino-build\` |
 | 硬件 | ESP32-S3 N16R8，8 MB OPI PSRAM，16 MB flash，CH343 UART |
 
@@ -460,6 +493,7 @@ HTTP 一轮：
 C:\Users\DELL\voice-ai\
   HANDOFF.md                         ← 本文；总入口
   README.md                          ← 环境/模型/坑；状态以本文为准
+  start-bridge.cmd                   ← 日常启动：开启记忆（MEMORY_ENABLED=1/DRY_RUN=0）
   bridge\
     README.md                        ← 契约、性能实测、记忆节
     config.py  server.py  pipeline.py  llm.py  brains.py  usage.py
@@ -467,10 +501,10 @@ C:\Users\DELL\voice-ai\
     worker_cosyvoice.py  worker_edge.py
     memory_store.py  memory_score.py  memory_extract.py
     memory_context.py  memory_maintenance.py  memory_admin.py
-    memory_writer.py                 ← 阶段 3 异步写作 + 阶段 4 维护/退出补刷（默认 dry-run）
+    memory_writer.py                 ← 阶段 3 异步写作 + 阶段 4 维护/退出补刷（代码默认 dry-run）
     context_builder.py               ← B 归档，未接入
     commands.py  local_commands.py   ← C 已接入：解析 + 本地回复文本
-    test_*.py                        ← 23 个 = 20 个 hermetic（17 unittest + 3 脚本自检）+ 3 个实跑脚本
+    test_*.py                        ← 24 个 = 21 个 hermetic（18 unittest + 3 脚本自检）+ 3 个实跑脚本
     bench_memory_score.py            ← L3 基准
   firmware\
     README.md
@@ -527,7 +561,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 
 - **总状态/下一步/硬约束**：`HANDOFF.md`（本文）。
 - **HTTP 契约/性能实测**：`bridge/README.md`。
-- **固件接线/编译/未验证项**：`firmware/README.md`。
+- **固件接线/编译/上机确认项与遗留**：`firmware/README.md`。
 - **硬件上机步骤**：`handoff/G-hardware-bringup.md`。
 - **记忆设计/阶段/验收**：`design/2026-10-23-layered-memory-design.md`。
 - 改数字前先重测；文档之间的旧口径以最新实测和本文为准，不要同时保留两套结论。
@@ -537,13 +571,13 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 1. **先定层**：设备/固件、HTTP 契约、bridge 对话链路、记忆、路由/账本、文档。一次只动一层。
 2. **契约变更**（端点、字段、音频格式、`X-Session-Id` 值）必须先报 bb96，并同时更新 bridge、firmware、README、测试；不得只改一边。
 3. **不动固件可调常量之外的代码**：上机阶段只允许改 `secrets.h` 的值和 `config.h` 里 G 手册明确列出的实测常量（`MIC_SHIFT`、`REC_SILENCE_RMS`、预缓冲/流缓冲）；改其它固件逻辑先停手报告。
-4. **记忆阶段**：阶段 3 dry-run 与阶段 4 接线均已完成、默认仍不写盘；切真实目录前先备份 `~/.voice-ai/memory/` 并取得用户确认；删除用 `memory_admin.py`，不要手删 JSONL。
-5. **默认关闭**：`MEMORY_ENABLED=0` 是当前发布默认；改默认值属于行为变更，必须单独验收。
+4. **记忆阶段**：真实目录已于 2026-10-23 启用（`start-bridge.cmd`），改记忆或删数据前先备份 `~/.voice-ai/memory/`；删除用 `memory_admin.py`，不要手删 JSONL。
+5. **默认关闭**：`config.py` 里 `MEMORY_ENABLED=0` 仍是发布默认，记忆只在 `start-bridge.cmd` 下开启；不要把默认值改成 1（会让测试/实跑脚本写入真实档案）。
 
 ### 14.3 测试门
 
-- 任何记忆改动：记忆 **202 例**（151 纯模块 + 27 writer + 24 集成）全过；再跑脚本 23 例。读路径硬门是 **p95 ≤20 ms**（500 episodes + 500 字 + 预热 token cache）；阶段 5 实测 p50 1.93 ms / p95 2.06 ms。
-- 任何 bridge 改动：显式清单 17 个 unittest 模块 **371 例** + 3 个脚本自检 **23 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`/`test_edge_content.py`）。
+- 任何记忆改动：记忆 **204 例**（151 纯模块 + 27 writer + 26 集成）全过；再跑脚本 27 例。读路径硬门是 **p95 ≤20 ms**（500 episodes + 500 字 + 预热 token cache）；阶段 5 实测 p50 1.93 ms / p95 2.06 ms。
+- 任何 bridge 改动：显式清单 18 个 unittest 模块 **379 例** + 3 个脚本自检 **27 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`/`test_edge_content.py`）。
 - 任何固件改动：三模式重编译，0 error；上机按 G 检查点复测。
 - 不把 `funasr` 环境错误当回归；不顺手跑 `test_e2e.py`、`test_live.py` / `throttle_probe.py`。
 - 提交前看 `git status`；只暂存源码/文档/测试，生成物与个人数据由 `.gitignore` 排除，不要 `git add -A`。
@@ -553,7 +587,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 | 想做的事 | 入口 | 注意 |
 |---|---|---|
 | 换云端大脑/加 profile | `~/.voice-ai/brains.toml` + `brain.profiles` | 密钥不进工作区；已出声不混脑 |
-| 加本地插件意图 | `bridge/commands.py` + 未来本地模型 | 只做功能，不写人格记忆 |
+| 加本地插件意图 | `bridge/commands.py` + `local_plugin.py` | 只做功能，不写人格记忆；应急兜底默认关闭 |
 | 加记忆类型/规则 | `memory_extract.py` / `memory_store.py` | 先加测试；敏感信息永不入库 |
 | 改记忆预算 | `MEMORY_INPUT_BUDGET_TOKENS` + `memory_context` 常量 | 500 字本轮输入不静默截断；先测最坏组合；整条读路径 p95 ≤20 ms |
 | 改固件模式/引脚 | `config.h` | 引脚表与契约同步；共享时钟路径未实现 |
