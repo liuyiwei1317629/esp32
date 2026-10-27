@@ -1,11 +1,13 @@
 # 给下一个 AI 的交接（2026-10-27）
 
 > 先读 `HANDOFF.md`（PC 端全量）与 `HANDOVER-G.md`（硬件最新，2026-10-26 定稿）。本文件只回答三件事：**现在在哪、什么能跑、下一步做什么**。
+>
+> **2026-10-27 08:17 更新**：TTS 延迟线（EcoQoS 节流修复、切句实验）另有交接单 `NEXT-AI-2026-10-27-tts-latency.md`；本文件的相关状态已按该交接单更新。
 > PC 端是主体；ESP32-S3 硬件已于 2026-10-26 接线上电，本地录放链路可用；联网两模式 2026-10-27 **已上机验证**（TURN 多轮 `result=ok`，TURN_STOP 打断 `stop_ms=18–20`、`result=aborted`）。
 
 ## 0. 一句话
 
-PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用并验证；本地 2B 只会应急兜底且默认关闭；硬件已接线上电、本地录放定稿，**联网两模式已上机验证**（含播放中打断）；长回复断续已定位并修掉主因（播放缓冲 1 s → 3 s），残余只在开头的 1 秒左右，根因在服务端按句合成的节奏，**不在固件可改范围**；**当前 bridge 和 Ollama 都没有在运行**；**本地兜底和硬件固件的改动都还没提交**。
+PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用并验证；本地 2B 只会应急兜底且默认关闭；硬件已接线上电、本地录放定稿，**联网两模式已上机验证**（含播放中打断）；长回复断续已真机收敛：3 s 播放缓冲 + 切句定案（首句 ≥18、第二句 ≥20 可逗号切且 26 字上限、其余 ≥18），69.1 s 回复 0 次断流、首字节 4.4–5.2 s；**当前 bridge 还在运行（0.0.0.0:8080），Ollama 未运行**；**三条线均已提交（`1a14b2a`、`1205609`、`106e57d`，均未推送）**。
 
 ## 1. 当前状态（2026-10-27 实测）
 
@@ -17,21 +19,18 @@ PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用�
   - 不带记忆：`.venv\Scripts\python.exe bridge\server.py --serve`
   - 不占 GPU：加 `--no-cosyvoice`
 - 局域网：文档写 `192.168.0.100:8080`，但本机当前 WLAN 是 **192.168.0.101**；启动前用 `ipconfig` 确认，别照抄旧 IP。
-- 8080 入站防火墙归 bb96；连不上只报告，不改规则。
+- 8080 入站防火墙改动属系统级；连不上只报告，不改规则。
 
 ### 代码
-- 仓库：`C:\Users\DELL\voice-ai`，分支 `main`，与 `origin/main` 同步，HEAD `8a23c69`。
-- **工作区有未提交改动**（本会话没有提交、没有推送）：
-  - PC 端已修改：`.github/workflows/hermetic.yml`、`HANDOFF.md`、`README.md`、`bridge/README.md`、`bridge/config.py`、`bridge/pipeline.py`、`bridge/server.py`、`bridge/test_memory_integration.py`、`bridge/test_pipeline.py`
-  - PC 端未跟踪：`bridge/local_plugin.py`、`bridge/test_local_plugin.py`、`start-bridge.cmd`
-  - 硬件会话改动：`firmware/README.md`、`firmware/voice_terminal/audio_io.cpp`、`audio_io.h`、`config.h`、`voice_terminal.ino`；未跟踪 `HANDOVER-G.md`、`NEXT-AI.md`、`firmware/voice_terminal/snapshots/`
-- PC 端改动是“本地应急兜底 + 启动记忆状态行 + 文档同步”；固件改动是 2026-10-26 的录放定稿加 2026-10-27 上机修正（删开机音阶与死代码、播放缓冲 1 s→3 s），**不要回滚或覆盖**。
-- 提交前先问用户；两个会话的改动不要混在一个未经审查的 `git add -A` 里。
+- 仓库：`C:\Users\DELL\voice-ai`，分支 `main`，HEAD `106e57d`（未推送；`1a14b2a` 固件、`1205609` 长回复修复、`106e57d` 本地兜底）。
+- **工作区干净**（2026-10-27 10:5x 提交后核对）；本机没有推送。
+- 三条线的落地顺序：`1a14b2a` 固件 3 s 缓冲 → `1205609` 切句定案与 winperf 反节流 → `106e57d` 本地应急兜底与记忆状态行；固件是 2026-10-26 的录放定稿加 2026-10-27 上机修正（删开机音阶与死代码、播放缓冲 1 s→3 s），**不要回滚或覆盖**。
+- 以后仍要逐项暂存，不要 `git add -A`。
 
 ### 测试（2026-10-27 复跑）
-- 18 个 unittest 模块：`Ran 379 tests ... OK`（记忆 204）
-- 3 个脚本自检：`sentence_split 8/8`、`llm 9/9`、`pipeline 10/10`
-- hermetic 合计 21 个文件、406 例。
+- 19 个 unittest 模块：`Ran 381 tests ... OK`（记忆 204）
+- 3 个脚本自检：`sentence_split 10/10`、`llm 9/9`、`pipeline 10/10`
+- hermetic 合计 22 个文件、410 例。
 
 ### 记忆
 - 真实目录：`C:\Users\DELL\.voice-ai\memory\`
@@ -56,7 +55,7 @@ PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用�
 - 上机时改掉两处：
   1. **删掉开机 6 声诊断音阶**（整段连同注释），只留录音开始那声 60 ms「嘀」；`playDC`/`playSweep` 成死代码一并删掉。删之前 4 次录音全零（`mic_raw min=0 max=0`、被 `no_voice` 丢弃），删之后每次 `voice=1`——**这是经验事实，机制未查清，别写成结论**。
   2. **播放缓冲 1 s → 3 s**（`PLAY_STREAM_BYTES_MAX=98304`，内部 RAM 不够时自动降级到 2 s / 1 s，`play_buf=` 那行会打实际值）。长回复断续从中后段大面积补静音缩到零星缺口：干净版实测 55.7 s 回复 `underruns=46`（46×32 ms ≈ 1.47 s 静音、2.6%），修之前 7.1 s 回复就有 59 次（≈1.89 s、27%）。`heap_free` 约 188 KB、IDLE heap 约 1.27 MB 仍有富余。
-- 已知瑕疵：每轮一次 `NetworkClient setSocketOption fail on -1 errno 9`，不影响 `status=200`；残余静音在回复开头几秒，是 bridge 按句合成（`CHUNK_BYTES=4096`，句间合成停顿 1.1–5.6 s）的节奏问题；再压要么动 bridge（找 bb96），要么抬高播放起始水位（用首字节延迟换平滑，当前 160 ms），不要只加深缓冲。
+- 已知瑕疵：每轮一次 `NetworkClient setSocketOption fail on -1 errno 9`，不影响 `status=200`；残余静音在回复开头，2026-10-27 真机定位为开局赤字（合成第二句慢于第一句音频），已按首句 ≥18 / 第二句 ≥20（26 字上限）/ 其余 ≥18 切句收敛到 0 次（69.1 s 回复；首字节 4.4–5.2 s）；不要靠加深缓冲解决（6 s 已验证无效）。
 - 打断时机已定（用户 2026-10-27）：**只在出声后生效**；等待首字节期间按 BOOT 无反应，也不发 `/stop`。
 - 烧录口是 **COM5 / CH343**，不是 native CDC。XMC flash 需要 bootloader patch（偏移 `0x3EF1`，`66caed`→`661aed`），升级 esp32 core 后要重打；原件备份在 `D:/arduino-cli/bootloader-backup/`。
 - 串口监视要 `DtrEnable=false`，手动拉 `Rts` 复位；`arduino-cli monitor` 不会触发复位。
@@ -72,10 +71,10 @@ PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用�
 
 ## 2. 下一步（按优先级）
 
-### P0 · 收口未提交的本地兜底
-1. 先看 `git diff` 和三个未跟踪文件，确认没有密钥、没有个人数据。
-2. 跑下面“测试门”，必须全过。
-3. **经用户点头后**再提交（本会话未获提交授权）。建议一个提交包含：本地兜底、启动状态行、CI/文档同步。
+### P0 · 本地兜底收口（已完成 2026-10-27）
+1. ~~看 `git diff` 和未跟踪文件，确认没有密钥、没有个人数据~~ → 已核对。
+2. ~~跑测试门~~ → 19 个 unittest 模块 381 例 + 3 个脚本自检 29 例全过。
+3. ~~经用户点头后提交~~ → 已按线拆开提交：`1205609`（切句 + winperf）、`106e57d`（本地兜底 + 记忆状态行）。
 
 ### P0 · 启动并验收真实链路
 1. 启动 `start-bridge.cmd`，确认状态行是 `memory: enabled ... dry_run=False`。
@@ -86,21 +85,20 @@ PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用�
 ### P0 · 硬件下一步：联网已通，剩下的是听感与运维
 1. 保持 `RECORD_ONLY` 的定稿音频参数，不要回退去调增益/限幅。
 2. 联网链路已经通了（`secrets.h` 已建、TURN/TURN_STOP 都上过机），**不要重复建/覆盖 `secrets.h`**，也不要让里面的值出现在终端或提交里。
-3. 短回复（1–4 s）听感已经正常；长回复只剩开头约 1 秒的静音缺口，根因在 bridge 按句合成。要再压下去只能动 bridge（加预取/交错合成），**先找 bb96**，别在固件侧继续加深缓冲（3 s 已接近内部 RAM 舒适上限）。
-4. 任何契约变更（加字段/端点）先告诉 bb96，不得直接改 bridge。
-5. 改接线、烧录、换供电前确认用户在场；不要在未确认时自行改动。
+3. 短回复（1–4 s）听感已经正常。长回复开头的空档已真机定位为「合成第二句慢于第一句音频」，切句定案（首句 ≥18、第二句 ≥20 可逗号切且 26 字上限、其余 ≥18）后真机断流 46 → 0 次（69.1 s 回复）、首字节 4.4–5.2 s；3 s 缓冲不要再加（加过 6 s，无效）。
+4. 改接线、烧录、换供电前确认用户在场；不要在未确认时自行改动。
 
 ### P1 · 延迟与运维
-- 首字节实测 2.2–4.2 s，目标 1.5–2 s；瓶颈是首句字数 × TTS 速度，不是 HTTP。
+- 首字节约 4.4–5.2 s（真机，≥18 字首句）；1.5–2 s 目标降级为长期项。主因是 TTS 固定开销（真机约 0.6 s/次 + 110 ms/字；llm/flow/hift 未拆分计时），不是 HTTP；流式合成已实测更慢（§3.13）。
 - E（LLM 等待窗口预热 CosyVoice）未做；需要 GPU 授权，且不能与其他 GPU 任务并行。
-- `X-Session-Id` 仍是 `d=dev1` 历史 bug；改响应头是可见契约变更，需 bb96 确认。
+- `X-Session-Id` 仍是 `d=dev1` 历史 bug；改响应头是可见契约变更，需用户确认。
 - bridge 无开机自启/守护；用量账本只是估算，没有硬额度。
 
 ### P2 · 记忆与模型
 - 中文 bigram 对“猫/养猫”这类查询召回不足；是否加 unigram fallback 要先用真实查询评估。
 - `memory_debug.jsonl`、p95 自动回归门未做；当前读路径实测 p50 1.93 ms / p95 2.06 ms，硬门 p95 ≤20 ms。
 - 本地 4B/9B 选型仍保留；当前 2B 只用于应急，不承载人格与长期记忆。
-- 升级顺序不可跳：HTTP 跑通 → WebSocket（先报 bb96）→ 设备端 VAD/全双工（需 AEC）→ 唤醒词。
+- 升级顺序不可跳：HTTP 跑通 → WebSocket（先确认）→ 设备端 VAD/全双工（需 AEC）→ 唤醒词。
 
 ### P2 · 后续扩展：屏幕 + 充电宝（未采购、未实现）
 - 屏幕走 SPI；首选 3.3V 逻辑的 1.28 寸 GC9A01 圆屏（240×240）或 ST7789 方屏。6 线：SCLK、MOSI、CS、DC、RST、BL，接 GPIO 8–14；RST 避开 GPIO0（已是按键）；不要 RGB 并口屏。
@@ -133,9 +131,8 @@ PYTHONIOENCODING=utf-8 python test_pipeline.py
 
 - **API key 只在 PC（`~/.deepseek/key`），绝不下发设备；设备只持有 bridge_token（`~/.deepseek/bridge_token`）。**
 - **密钥、完整会话记录不写进工作区。**
-- **固件若要改契约（加字段/端点）先告诉 bb96，不得直接改 bridge。**
 - **用户说「停/停停」立即停手。**
-- **不要重复采购，不要改 bridge 代码，不要跑 GPU 任务。**
+- **不要重复采购。**
 - **除非用户另有指示，不要开始接线、采购或改代码。**
 - `~/.deepseek/key` 和 `~/.deepseek/bridge_token` 只能确认存在，不要读取或打印内容。
 - `bridge/out/` 录音、`test-data/`、`~/.voice-ai/memory/` 明文都属于个人数据，不要上传、不要贴进公开仓库。
@@ -168,7 +165,7 @@ PYTHONIOENCODING=utf-8 python test_pipeline.py
 - 硬件烧录口是 COM5 / CH343，不是 native CDC；XMC flash 的 bootloader patch 在升级 core 后会丢，要重打。
 - 串口监视要 `DtrEnable=false` + 手动拉 `Rts`；`arduino-cli monitor` 不会复位。
 - 模块只有一根 USB 线（无 VCC/GND 针）；模块和板子必须同电脑/同 hub/同充电宝，地是“借道”的。
-- 固件改动来自另一个会话，未提交；不要用 `git checkout` 回滚，也不要把它和 PC 端改动混提交。
+- 固件已在 `1a14b2a` 提交；bridge 工作区混着两条线，不要 `git add -A`。
 
 ## 7. 接手第一步（建议顺序）
 

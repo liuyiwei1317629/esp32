@@ -19,7 +19,7 @@
   1. `firmware/voice_terminal/secrets.h` 的**值**（Wi-Fi、bridge 地址、token）；
   2. `firmware/voice_terminal/config.h` 里本手册明确点名的**实测常量**（`MIC_SHIFT`、`REC_SILENCE_RMS`，必要时 `PLAY_PREBUFFER_BYTES` / `PLAY_STREAM_BYTES`）。
 - 除这两类之外，任何代码改动都先停手报告；不改 `bridge/**`，不改 `/turn` 契约，不改防火墙。
-- 唯一可能推翻“不改代码”的硬件分支：`SCK↔BCLK` 或 `WS↔LRCLK` 导通（模块内部共时钟）。此时**不是调常量能解决的**，必须停手、报告 bb96，按单总线方案重写固件；不要为了编译通过把 `MIC_AMP_SHARED_CLOCKS` 改成 1（会触发 `#error`）。
+- 唯一可能推翻“不改代码”的硬件分支：`SCK↔BCLK` 或 `WS↔LRCLK` 导通（模块内部共时钟）。此时**不是调常量能解决的**，必须停手、报告用户，按单总线方案重写固件；不要为了编译通过把 `MIC_AMP_SHARED_CLOCKS` 改成 1（会触发 `#error`）。
 - 上机结束时，`config.h` 里实测改过的常量要写进报告；那是“实测值”，不是新的默认值。
 
 ### 0.2 最短路径（按顺序，不跳步）
@@ -262,7 +262,7 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml mon
 7. 判定：
    - 401 → bridge_token 不一致；检查 `secrets.h`，不要打印 token。
    - 204 → ASR 空；回到检查点 6 看 RMS/录音。
-   - 连接失败/超时 → 桥没起、IP 错、防火墙 8080、不同网段；报告 bb96，不要改防火墙。
+   - 连接失败/超时 → 桥没起、IP 错、防火墙 8080、不同网段；报告用户，不要改防火墙。
    - 200 但无声 → 查 `X-Voice`、chunked 解析、预缓冲、I2S TX。
 8. 记录首字节（`first_pcm_ms`）和桥端 `FIRST_AUDIO_MS`；两者应接近。
 
@@ -303,7 +303,7 @@ underruns：
 | 没有 Wi-Fi | 2.4 GHz、SSID/密码、路由器隔离 | 不要改用 5 GHz |
 | 401 | token 文件与 `secrets.h` 一致性 | 不要把 token 贴进对话 |
 | 204 | 录音 RMS、话筒接线、24-bit | 不要改 ASR |
-| 连接超时 | 桥是否在跑、IP、8080 防火墙 | 不要改防火墙；找 bb96 |
+| 连接超时 | 桥是否在跑、IP、8080 防火墙 | 不要改防火墙；报告用户 |
 | 有 PCM 无声 | I2S TX、5 V、喇叭、BTL | 不要把喇叭端接地 |
 | 话筒全 0 | 5 V、SCK/WS/SD、声道、24-bit | 不要静默猜移位 |
 | 失真/削顶 | 24-bit 转换、采样率、供电 | 不要用软件增益掩盖 |
@@ -312,7 +312,7 @@ underruns：
 
 ## 14. 安全与边界
 
-- 不改 `bridge/` 任何代码；契约变更找 bb96。
+- 本 runbook 不改 `bridge/`；契约变更先问用户。
 - 不改 Windows 防火墙 8080 入站规则；连接失败只报告。
 - 不跑 GPU；`--no-cosyvoice` 起步；要跑 CosyVoice 必须用户明确同意且没有别的会话占卡。
 - 不采购；零件不够就停。

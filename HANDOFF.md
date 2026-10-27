@@ -9,8 +9,8 @@
 ## 2026-10-27 状态更新（优先于下文）
 
 - **硬件已接线上电**：2026-10-26 本地录放链路定稿可用（无沙沙、响度一致、无破音），快照 `firmware/voice_terminal/snapshots/2026-10-26_final-v3/`，参数 `CLIP_TARGET_RMS=2700` / `CLIP_GAIN_MAX=8.0`。**联网两模式 2026-10-27 已上机验证**：TURN 多轮 `result=ok`、`first_pcm_ms` 2.2–4.2 s；TURN_STOP 播放中按 BOOT 打断 `stop_ms=20/18`、`result=aborted`（本地先静音再 POST `/stop`）。当前烧的是 `APP_MODE_TURN_STOP`；打断只在出声后生效（用户当天确认）。硬件事实以 `HANDOVER-G.md` 为准。
-- **2026-10-27 上机时改掉两处**：① 删掉开机 6 声诊断音阶（连同 `playDC`/`playSweep` 死代码），只留录音开始那声 60 ms「嘀」——删之前录音全零、删之后 `voice=1`，属经验事实、机制未查清；② 播放缓冲 1 s → 3 s（`PLAY_STREAM_BYTES_MAX=98304`，不够时自动降 2 s / 1 s），长回复断续从中后段大面积补静音缩到只在开头约 1 秒，残余根因是 bridge 按句合成的节奏。
-- **固件工作区改动来自硬件会话，未提交**：`firmware/README.md`、`audio_io.cpp/.h`、`config.h`、`voice_terminal.ino`；未跟踪 `HANDOVER-G.md`、`NEXT-AI.md`、`snapshots/`。不要回滚或覆盖。
+- **2026-10-27 上机时改掉两处**：① 删掉开机 6 声诊断音阶（连同 `playDC`/`playSweep` 死代码），只留录音开始那声 60 ms「嘀」——删之前录音全零、删之后 `voice=1`，属经验事实、机制未查清；② 播放缓冲 1 s → 3 s（`PLAY_STREAM_BYTES_MAX=98304`，不够时自动降 2 s / 1 s），长回复断续从中后段大面积补静音缩到只在开头约 1 秒。开口缺口 2026-10-27 真机定位为**开局赤字**（合成第二句比第一句音频慢），固件不用改；改法是首句 ≥18 字、第二句 ≥20 字且允许逗号切（26 字硬上限）、第三句起 ≥18 字，真机 69.1 s 回复 0 次断流、首字节 4.4–5.2 s，见 `NEXT-AI-2026-10-27-tts-latency.md` §3.15。
+- **固件与硬件文档已随 `1a14b2a` 提交**：`firmware/README.md`、`audio_io.cpp/.h`、`config.h`、`voice_terminal.ino`、`HANDOVER-G.md`、`NEXT-AI.md`、`snapshots/`。不要回滚或覆盖。
 - **屏幕 + 充电宝仅规划，未采购、未实现**；模块是自带 USB 线的成品音箱板，只有一根 USB（红 5V / 黑 GND），没有 VCC/GND 杜邦针。
 - **当前供电全部来自电脑**；充电宝/独立电源方案未执行。
 
@@ -77,8 +77,8 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
   - 2026-10-27 收尾清理后重编：RECORD_ONLY 397,319 B（30%）/ 52,316 B（15%）、TURN 943,302 B（71%）/ 71,316 B（21%）、TURN_STOP 943,486 B（71%）/ 71,316 B（21%），**0 error / 0 warning**（删掉了 `playDC`/`playSweep` 与全部临时诊断打印）。
   - `--warnings all` 下自有文件 0 warning；`compile_commands.json` 确认 `-DAPP_MODE=1/2` 生效。2026-10-26 上机完成本地录放，**2026-10-27 联网两模式上机验证通过**（见 §1.2 开头）。
   - 2026-10-22 复审后修了 6 处：`s_waitRelease` 重复触发、播放排空 abort 卡死、`/stop` 先本地 flush、排空阶段可打断、上传提前响应/超时、`MIC_AMP_SHARED_CLOCKS=1` 编译守卫。单总线路径仍未实现，只是被禁止。
-- **测试环境口径**：脚本自检 27/27（sentence_split 8、llm 9、pipeline 10）。**单元回归必须用显式模块清单**：18 个 unittest 模块共 **379 例全过**，其中记忆 204 例；加上 3 个脚本自检，hermetic 合计 **21 个测试文件、406 例**。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
-- 性能基线（以 `bridge/README.md` 实测节为准）：首字节常见 2.4–5.3 s；首句 6–8 字；CosyVoice 快态 125–215 ms/字，慢态可到 300–558 ms/字，重启后恢复；DeepSeek TTFT 0.1–1.0 s；ASR 在 CPU 上约 0.2–0.5 s。
+- **测试环境口径**：脚本自检 29/29（sentence_split 10、llm 9、pipeline 10）。**单元回归必须用显式模块清单**：19 个 unittest 模块共 **381 例全过**（2026-10-27 实测），其中记忆 204 例；加上 3 个脚本自检，hermetic 合计 **22 个测试文件、410 例**。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
+- 性能基线（以 `bridge/README.md` 实测节为准）：首字节常见 4.4–5.2 s（2026-10-27 切句定案：首句 ≥18 字、第二句 ≥20 字可逗号切且 26 字硬上限、其余 ≥18 字；真机 69.1 s 回复 0 次断流，22.8–81.4 s 共七轮 0 次，修前 46 次）；CosyVoice 快态 125–215 ms/字，慢态可到 300–558 ms/字，重启后恢复；DeepSeek TTFT 0.1–1.0 s；ASR 在 CPU 上约 0.2–0.5 s。
 - `~/.deepseek/key` 与 `~/.deepseek/bridge_token` 已配置；只能确认存在，不要读取或打印内容。
 - 根 `README.md` 与 `bridge/README.md` 的「云端为主 + 本地功能插件」节已同步；记忆与固件的最终口径以本文和 `bridge/README.md` 记忆节为准。
 
@@ -88,7 +88,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 
 > 2026-10-27 结果：TURN 多轮 `result=ok`（`first_pcm_ms` 2.2–4.2 s；整轮墙钟 5–61 s）。**日志字段名有歧义，读的时候别望文生义**：串口的 `upload_ms` 实际是**整轮墙钟**（上传+等待+播放+排空，`millis()-t0`），`play_ms` 是**回复音频时长**（`pcm_bytes/32`，不是播放耗时）。bridge 侧识别正常；TURN_STOP 播放中按 BOOT 打断两次 `stop_ms=20/18`、`result=aborted`，本地先静音再 `POST /stop`。等待首字节期间按键按设计不响应。
 >
-> 上机时改了两处：① **删掉开机 6 声诊断音阶**（连同注释与死代码 `playDC`/`playSweep`），删之前 4 次录音全零、删之后每次 `voice=1`——**经验事实，机制未查清**；② **播放缓冲 1 s → 3 s**，长回复断续从中后段大面积补静音缩到只剩零星缺口——干净版实测 55.7 s 回复 `underruns=46`（≈1.47 s 静音、2.6%），修之前 7.1 s 回复就有 59 次（≈1.89 s、27%）。残余在回复开头几秒，根源是 bridge 按句合成（`CHUNK_BYTES=4096`，句间合成停顿 1.1–5.6 s）；**再压只能动 bridge / 加播放起始水位换延迟，先找 bb96**。
+> 上机时改了两处：① **删掉开机 6 声诊断音阶**（连同注释与死代码 `playDC`/`playSweep`），删之前 4 次录音全零、删之后每次 `voice=1`——**经验事实，机制未查清**；② **播放缓冲 1 s → 3 s**，长回复断续从中后段大面积补静音缩到只剩零星缺口——干净版实测 55.7 s 回复 `underruns=46`（≈1.47 s 静音、2.6%），修之前 7.1 s 回复就有 59 次（≈1.89 s、27%）。残余缺口全在回复开头，2026-10-27 真机逐句遥测定位为**开局赤字**：缺口 ≈ 合成(第二句) − 音频(第一句)。定案：首句 ≥18 字、第二句 ≥20 字（允许逗号切）、其余 ≥18 字，第二句另加 26 字硬上限；真机 69.1 s 回复 0 次断流，72.5 s 那轮（加上限前）5 次（0.16 s），其余五轮 0 次；首字节 4.4–5.2 s（见 `NEXT-AI-2026-10-27-tts-latency.md` §3.15）。
 >
 > 下面 1–6 是 2026-10-26 初始上机的历史记录，保留备查。
 
@@ -119,12 +119,12 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 
 - bridge 没有开机自启/守护；电脑重启后要手动 `server.py --serve`。
 - 用量账本只是估算，没有硬性额度/自动停机；额度控制仍靠控制台。
-- 8080 入站防火墙归 bb96；连接失败只报告，不改规则。
-- `X-Session-Id` 仍是 `d=dev1`（`server._session()` 的历史 bug）；记忆桶已独立解析，但修头值是可见契约变更，需 bb96 确认。
+- 8080 入站防火墙改动属系统级变更；连接失败只报告，不改规则。
+- `X-Session-Id` 仍是 `d=dev1`（`server._session()` 的历史 bug）；记忆桶已独立解析，但修头值是可见契约变更，需用户确认。
 
 **P1 · 延迟**
 
-- 首字节 2.4–5.3 s，距 1.5–2 s 目标仍有差距；瓶颈是首句字数 × TTS 速度，不是 HTTP 本身。
+- 首字节：切句定案后真机 4.4–5.2 s（原 6–8 字首句为 2.0–2.5 s）；换来长回复开局不再掉空档（真机修前 46 次 → 69.1 s 回复 0 次）。1.5–2 s 目标降级为长期项，瓶颈是 TTS 固定开销（真机约 0.6 s/次 + 110 ms/字），不是 HTTP。
 - E（LLM 等待窗口预热 CosyVoice）未做；需要 GPU 授权且不能与其他 GPU 任务并行。
 - CosyVoice 慢态靠重启恢复；不要用换引擎掩盖机器状态。
 
@@ -136,7 +136,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 **P2 · 未来升级（顺序不可跳）**
 
 1. 保持 HTTP，把板子跑通（当前）。
-2. WebSocket 流式上行/下行（收益最大；先向 bb96 报契约变更）。
+2. WebSocket 流式上行/下行（**收益已重估为可疑**：2026-10-27 实测 TTS 流式更慢、首字节主因是单次合成固定开销；真要做得先证传输是瓶颈；先向用户确认契约变更）。
 3. 设备端 VAD/全双工打断（必须配 AEC；服务端 VAD 切句不等于设备端打断）。
 4. 唤醒词（最后）。
 - UDP 只是局域网优化项，不是 MVP 前置条件。
@@ -157,7 +157,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - 中文 bigram 对单字/跨字查询（“猫”“养猫”）召回不足；阶段 3/4 未改，留后续用真实查询评估是否加 unigram fallback。
 - 整条读路径：阶段 5 前的基线是独立复核 p50 6.1–6.4 ms、本机高相似数据 p50 11.5–13.0 ms；**阶段 5 改为只读投影后本机 500 条复测 p50 1.93 ms / p95 2.06 ms**（`active_episodes` p50 0.10 ms）。**硬门 p95 ≤20 ms**，<5 ms 目标已达成；剩余仅自动回归门。
 - `MemoryStore._sessions`、`RecentCache._items`、`MemoryWriter._seen_gens` 均已在阶段 5 加界（64/64/8192，LRU/FIFO），不再随进程生命周期无界增长。
-- `test_memory_integration.py` 的 2 处 `d=dev1` 硬断言已在阶段 3 改为契约断言；bb96 修 header 时不再误报。
+- `test_memory_integration.py` 的 2 处 `d=dev1` 硬断言已在阶段 3 改为契约断言；修正 header 时不再误报。
 - 记忆是 `~/.voice-ai/memory/` 下的明文短句；没有加密、自动备份、保留期执行。`bridge/out/` 与 `test-data/` 有真人录音，属于个人数据，不要上传。
 
 **P2 · 测试环境**
@@ -184,7 +184,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 
 - **API key 只在 PC（`~/.deepseek/key`），绝不下发设备；设备只持有 bridge_token（`~/.deepseek/bridge_token`）。**
 - **密钥、完整会话记录不写进工作区。**
-- **固件若要改契约（加字段/端点）先告诉 bb96，不得直接改 bridge。**
+- **契约变更（加字段/端点）先向用户确认，并同步 bridge、固件、README 与测试。**
 - **用户说「停/停停」立即停手。**
 - **不要重复采购，不要改 bridge 代码，不要跑 GPU 任务。**
 - **除非用户另有指示，不要开始接线、采购或改代码。**
@@ -195,7 +195,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - B/C/F/G **不得修改** `bridge/config.py`、`bridge/llm.py`、`bridge/pipeline.py`、`bridge/server.py`。集成只由本会话做。
 - B/C 的测试**只用标准库**，不联网、不调用模型、不读写密钥、不占 GPU。
 - F 的代码不得包含真实 Wi-Fi 密码、bridge_token、API key；只放 `secrets.example.h` 占位符。
-- G 不改 bridge、不改防火墙（8080 入站归 bb96）、不采购、不跑 GPU；先征得用户同意再装驱动或工具链。
+- G 不改防火墙（8080 入站变更属系统级）、不采购；起 GPU 任务前先问用户；先征得用户同意再装驱动或工具链。
 - 记忆阶段 3/4 默认 dry-run；真实目录已于 2026-10-23 启用（`start-bridge.cmd`）。改记忆或删数据前先备份；不要把 `config.py` 的默认值改成开启。
 
 ## 3. 接口契约（不要改）
@@ -214,7 +214,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | 起始水位 | 设备端先缓冲 150–200 ms PCM 再开 I2S，避免 underrun（固件当前 160 ms） |
 | 打断语义 | 设备收到 `/stop` 或本地按键后**本地 flush**；服务端可能还在等当前句合成完，连接晚关几秒不是可听延迟 |
 | 切脑 | 一旦向 TTS 送出内容，不在回复中途切换；下一轮再切 |
-| 记忆 | 不新增端点/字段；写路径由客户端启动开关控制（`start-bridge.cmd` 开启，代码默认 dry-run）；当前响应头 `X-Session-Id` 仍是 `d=dev1`，待 bb96 决定是否修 |
+| 记忆 | 不新增端点/字段；写路径由客户端启动开关控制（`start-bridge.cmd` 开启，代码默认 dry-run）；当前响应头 `X-Session-Id` 仍是 `d=dev1`，待用户决定是否修 |
 
 `/turn` 的处理顺序是：读 WAV → SenseVoice → 云端 LLM 流式 → 切句 → TTS → chunked PCM。云端 TTFT 不是主要瓶颈，首句字数 × 合成速度才是。
 
@@ -263,7 +263,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 | 序 | 阶段 | 收益/前提 | 不要提前做的事 |
 |---|---|---|---|
 | 1 | **保持 HTTP，先把板子跑通** | 唯一能验证 24-bit 移位、I2S 电平、供电、PSRAM 的路径；G 段全部工作都在这里 | 不要在板子跑通前改状态机、换传输、加模型 |
-| 2 | **换 WebSocket 流式**（当前收益最大） | 一次请求一整段 WAV 的模型会把首字节拖到 2.4–5.3 s；流式才能真正削掉「录完整段才开始」这一段等待 | 不要在 1 未通过时动契约 |
+| 2 | **传输/流式（已重估，不再是首选）** | 2026-10-27 实测 CosyVoice `stream=True` 首块 2.84–3.60 s、块到达 RTF 1.09–1.63，比整句合成还慢，**流式拿不到收益**；首字节的主因是 TTS 单次调用约 1.9 s 固定开销，不是 HTTP（见 `NEXT-AI-2026-10-27-tts-latency.md` §3.11–§3.13） | 不要为了「流式」改契约——先证明传输不是瓶颈 |
 | 3 | **加 VAD / 打断**（需要 AEC） | 设备侧麦克风与喇叭同板紧贴，回声路径强；没有 AEC 做不了全双工打断 | 不要用「关麦 + 定时」假装全双工 |
 | 4 | **最后才考虑唤醒词** | 唤醒词解决的是「不用手也不误触发」，优先级低于对话本身自然度 | 不要在 2/3 之前占 Flash 给唤醒词模型 |
 | — | UDP（局域网优化项，**非必需**） | 只在第 2 步的 WebSocket 已嫌重、且局域网丢包/延迟成为实测瓶颈时才评估 | 不要把它当 MVP 前置条件 |
@@ -273,7 +273,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - 设备端目前是**按住说话**：`voice_terminal.ino` 只在按键按下时进 RECORDING；结束条件是「松手 / 静音 1.2 s / 最长 15 s」。每轮都要再按一次，说话时不能松手。
 - 免按键属于第 3 步，不是第 1 步；最小可用形态是「播放期间关麦 + 播完自动开麦」的半双工循环（不需要 AEC），但**不允许**把它说成支持打断。
 - 现 `REC_SILENCE_RMS=500` 仍是未实测的拍脑袋值；第 1 步的串口 rms 日志要先攒够，再谈阈值或换模型 VAD。
-- 第 2 步的服务端形态未定（WebSocket 端点、帧格式、会话保持），落地前需先把契约变更报给 bb96，并在第 3 节留档。
+- 第 2 步的服务端形态未定（WebSocket 端点、帧格式、会话保持），落地前需先把契约变更报给用户，并在第 3 节留档。
 - **两个 VAD 不是同一个东西**：第 2 步里的「VAD 切句」是**服务端**断句（判一段话说完、喂给 ASR），不需要 AEC；第 3 步的 VAD 是**设备端**全双工打断（播放中判断用户插话），必须配 AEC。
 - **WS 的收益不在协议本身**：瓶颈是 TTS 合成速度（CosyVoice 快态 125–215 ms/字）和「录完整段才开始」这两段等待。换 WS 缩短的是后者；前者要靠首句更短或更快引擎。
 - 同一份路线在 Qoder 项目记忆里另有副本：`C:\Users\DELL\.qoder-cn\projects\C--Users-DELL-Documents-deepseek-harness-default-workspace\memory\project-esp32-voice-kit.md`（`Upgrade roadmap` 一节）。数字口径以 `bridge/README.md` 实测节为准。
@@ -409,7 +409,7 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml com
 
 ## 10. 已知阻塞与风险
 
-1. **硬件已上机（2026-10-26 录放、2026-10-27 联网）**：本地录放链路定稿；**TURN 多轮 `result=ok`、TURN_STOP 打断 `stop_ms=20/18` 已实机验证**。打断只在出声后生效（用户 2026-10-27 定）：等待首字节期间按 BOOT 无反应，也不发 `/stop`。遗留：长回复开头约 1 秒仍有静音缺口（bridge 按句合成的节奏，改它要动 bridge）；每轮一次 `NetworkClient setSocketOption fail on -1 errno 9`，不影响 `status=200`。
+1. **硬件已上机（2026-10-26 录放、2026-10-27 联网）**：本地录放链路定稿；**TURN 多轮 `result=ok`、TURN_STOP 打断 `stop_ms=20/18` 已实机验证**。打断只在出声后生效（用户 2026-10-27 定）：等待首字节期间按 BOOT 无反应，也不发 `/stop`。遗留：长回复开头的静音缺口已真机定位为「合成第二句慢于第一句音频」，切句定案（首句 ≥18、第二句 ≥20 可逗号切且 26 字上限、其余 ≥18）后真机 69.1 s 回复 0 次断流（七轮 0–5 次），**固件不用改**（1.8 s 起播水位实测无效，已回退）；每轮一次 `NetworkClient setSocketOption fail on -1 errno 9`，不影响 `status=200`。
 2. **记忆只在专用启动脚本下生效**：`start-bridge.cmd` 设 `MEMORY_ENABLED=1`/`MEMORY_DRY_RUN=0`，真实目录已启用；直接运行 `server.py` 仍是关闭 + dry-run，不会积累。事实/情节只按固定句式抽取（「记住…」「我叫…」等），普通陈述只进会话摘要。`~/.voice-ai/memory/` 是明文，勿上传。
 3. **定时提醒无法主动出声**：现有 HTTP 是单向请求/响应；C 已能解析并本地回复，但到点主动出声还需要新通道。不要用睡眠线程 + 直接调用 TTS 糊过去，那会绕开设备播放路径。
 4. **本地命令覆盖有限**：只识别 stop/time/timer；`time` 依赖 PC 本地时钟；`timer` 只确认、不到点响（原因见第 3 条）。
@@ -418,13 +418,13 @@ D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml com
 7. **24-bit 话筒格式已由 2026-10-26 实测确定**：录音链路正常（语音从 448 ms 开始、峰值 2600–4500、underruns=0）；当前移位/位宽以 `HANDOVER-G.md` 和 `config.h` 定稿值为准，不要再按旧假设改。
 8. **两路 I2S 时钟**：模块内部**没有共同时钟**（测过 7 组引脚全 open），按两路独立接；不要开 `MIC_AMP_SHARED_CLOCKS=1`（会 `#error`）。
 9. **CosyVoice 慢态**：长时间运行后可能从 125–215 ms/字掉到 300–558 ms/字；重启恢复，不要换引擎或改契约。
-10. **8080 入站防火墙归 bb96**：G 只验证，不改规则；连接失败先报告。
-11. **`X-Session-Id` 仍是 `d=dev1`**：`_session()` 历史 bug；记忆桶已独立解析，不影响读取，但修头值是可见契约变更，需 bb96 确认。
+10. **8080 入站防火墙改动属系统级**：G 只验证，不改规则；连接失败先报告。
+11. **`X-Session-Id` 仍是 `d=dev1`**：`_session()` 历史 bug；记忆桶已独立解析，不影响读取，但修头值是可见契约变更，需用户确认。
 12. **无硬性成本上限**：账本只是估算；没有自动停机。额度控制靠控制台。
-13. **首字节 2.4–5.3 s**：距 1.5–2 s 目标有差距；E 未做，首句字数和 TTS 速度是主因。
+13. **首字节约 4.4–5.2 s（真机）**：切句定案（首句 ≥18、第二句 ≥20 且 26 字上限、其余 ≥18），用 2–3 秒首字节换长回复开局无空档（真机断流 46 → 0 次）；1.5–2 s 目标降级为长期项，主因是 TTS 固定开销（真机约 0.6 s/次，E 未做）。
 14. **本地兜底不是第二人格**：2B 应急模型已接入但默认关闭，只做简单问答、不写记忆；Ollama 未启动或 PC 关机时仍只能念固定句。
 15. **记忆明文与个人音频**：`~/.voice-ai/memory/` 是明文短句；`bridge/out/`、`test-data/` 有真人录音。不要上传、不要贴公开仓库。
-16. **git 基线已建立**：源码/文档/测试已入库并推送（`5d7c279`、`d9cda6b`）；`.gitignore` 已排除运行时、模型、音频、日志与 `secrets.h`。**2026-10-26 的硬件固件改动加 2026-10-27 上机修正（`audio_io.*`、`config.h`、`voice_terminal.ino`、`firmware/README.md`）和 10-23 的本地兜底改动仍未提交**；后续提交仍要逐项暂存，不要 `git add -A`。
+16. **git 基线已建立**：源码/文档/测试已入库（`5d7c279`、`d9cda6b` 已推送 origin/main）；`.gitignore` 已排除运行时、模型、音频、日志与 `secrets.h`。2026-10-27 三条线已提交：固件与硬件文档 `1a14b2a`、切句定案与 winperf `1205609`、本地兜底与记忆状态行 `106e57d`；**均未推送**。后续提交仍要逐项暂存，不要 `git add -A`。
 
 ## 11. 环境与路径
 
@@ -569,7 +569,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 ### 14.2 改动协议
 
 1. **先定层**：设备/固件、HTTP 契约、bridge 对话链路、记忆、路由/账本、文档。一次只动一层。
-2. **契约变更**（端点、字段、音频格式、`X-Session-Id` 值）必须先报 bb96，并同时更新 bridge、firmware、README、测试；不得只改一边。
+2. **契约变更**（端点、字段、音频格式、`X-Session-Id` 值）必须先向用户确认，并同时更新 bridge、firmware、README、测试；不得只改一边。
 3. **不动固件可调常量之外的代码**：上机阶段只允许改 `secrets.h` 的值和 `config.h` 里 G 手册明确列出的实测常量（`MIC_SHIFT`、`REC_SILENCE_RMS`、预缓冲/流缓冲）；改其它固件逻辑先停手报告。
 4. **记忆阶段**：真实目录已于 2026-10-23 启用（`start-bridge.cmd`），改记忆或删数据前先备份 `~/.voice-ai/memory/`；删除用 `memory_admin.py`，不要手删 JSONL。
 5. **默认关闭**：`config.py` 里 `MEMORY_ENABLED=0` 仍是发布默认，记忆只在 `start-bridge.cmd` 下开启；不要把默认值改成 1（会让测试/实跑脚本写入真实档案）。
@@ -577,7 +577,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 ### 14.3 测试门
 
 - 任何记忆改动：记忆 **204 例**（151 纯模块 + 27 writer + 26 集成）全过；再跑脚本 27 例。读路径硬门是 **p95 ≤20 ms**（500 episodes + 500 字 + 预热 token cache）；阶段 5 实测 p50 1.93 ms / p95 2.06 ms。
-- 任何 bridge 改动：显式清单 18 个 unittest 模块 **379 例** + 3 个脚本自检 **27 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`/`test_edge_content.py`）。
+- 任何 bridge 改动：显式清单 19 个 unittest 模块 **381 例**（2026-10-27 系统 Python 3.13 实测）+ 3 个脚本自检 **29 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`/`test_edge_content.py`）。`test_pipeline.py` / `test_llm.py` / `test_sentence_split.py` 是脚本式自检，**不要塞进 unittest 清单**——导入时就会跑模块级用例并改写 `llm.stream_reply` / `local_plugin.stream_reply`，污染同进程里的其他模块。
 - 任何固件改动：三模式重编译，0 error；上机按 G 检查点复测。
 - 不把 `funasr` 环境错误当回归；不顺手跑 `test_e2e.py`、`test_live.py` / `throttle_probe.py`。
 - 提交前看 `git status`；只暂存源码/文档/测试，生成物与个人数据由 `.gitignore` 排除，不要 `git add -A`。
@@ -592,7 +592,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 | 改记忆预算 | `MEMORY_INPUT_BUDGET_TOKENS` + `memory_context` 常量 | 500 字本轮输入不静默截断；先测最坏组合；整条读路径 p95 ≤20 ms |
 | 改固件模式/引脚 | `config.h` | 引脚表与契约同步；共享时钟路径未实现 |
 | 换 TTS/ASR | `tts.py` / `asr_engine.py` / worker | 不改 `/turn` 音频格式；先测首字节与内容回读 |
-| 加 WebSocket | 新端点 + 固件 | 先报 bb96；HTTP 保留兼容 |
+| 加 WebSocket | 新端点 + 固件 | 先向用户确认；HTTP 保留兼容 |
 | 加 VAD/打断 | 设备端 + AEC | 不能把半双工说成全双工 |
 | 加唤醒词 | 固件 | 最后做；先确认 Flash/RAM 预算 |
 

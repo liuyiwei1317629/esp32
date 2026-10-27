@@ -2,7 +2,7 @@
 
 选型：SenseVoice-Small 负责「听」，CosyVoice-300M-SFT 负责「说」，「想」走云端 agent，不留本地大脑。
 两个模型许可均为 Apache 2.0（SenseVoice 见魔搭模型页；CosyVoice 见 `CosyVoice/LICENSE` 正本）。
-本地不保留人格大脑；云端 profile 切换已实现（`bridge/brains.py`、`/brain`），用量账本写 `~/.voice-ai/usage.jsonl`；五层记忆阶段 1–5 已完成（默认 `MEMORY_ENABLED=0`、`MEMORY_DRY_RUN=1`，真实目录启用待确认）；规则命令（stop/time/timer）已在 `pipeline.Turn` 本地短路，不调云端；本地小模型仍是设计，见 `bridge/README.md`。
+本地不保留人格大脑；云端 profile 切换已实现（`bridge/brains.py`、`/brain`），用量账本写 `~/.voice-ai/usage.jsonl`；五层记忆阶段 1–5 已完成，**真实目录已于 2026-10-23 启用**（`start-bridge.cmd` 设 `MEMORY_ENABLED=1`、`MEMORY_DRY_RUN=0`；代码默认仍关闭，两轮真实写入已验证）；规则命令（stop/time/timer）已在 `pipeline.Turn` 本地短路，不调云端；本地应急兜底已接入（Ollama 0.40.8 + `qwen3.5:2b-q4_K_M`，`bridge/local_plugin.py`，默认关闭），见 `bridge/README.md`。
 当前进度、文件清单和下一步入口见 `HANDOFF.md`；测试命令见 `HANDOFF.md` §9；硬件上机按 `handoff/G-hardware-bringup.md`；B/C/F/G 四份外包提示词在 `handoff/`（B/C/F 已归档，G 现役）。
 
 ## 目录
@@ -12,6 +12,7 @@
 | `.venv/` | Python 3.13.16 环境，跑 ASR（torch 2.14.1+cu126、funasr 1.4.16） |
 | `py311/` | 嵌入式 Python 3.11.9 + pip，跑 TTS（官方 installer 在本机非管理员环境下会卡死，见下） |
 | `bridge/` | PC 桥：SenseVoice → 云端 LLM → TTS，规则命令、五层记忆模块与测试；契约见 `bridge/README.md` |
+| `start-bridge.cmd` | 带记忆开关启动 bridge（默认 `--serve`，也可接 `--mic --play` 等参数） |
 | `models/SenseVoiceSmall/` | 936 MB，来自魔搭 `iic/SenseVoiceSmall` |
 | `models/CosyVoice-300M-SFT/` | 1.9 GB，只取推理必需的 8 个文件（完整仓库 5.36 GB，其余是 zip/onnx 导出版） |
 | `CosyVoice/` | 官方源码 + `third_party/Matcha-TTS`，经 codeload tarball 获取（`github.com` 的 git 协议在本机被连接重置） |
