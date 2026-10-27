@@ -4,6 +4,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import config
 import llm
 import pipeline
 from pipeline import Bridge, Timers
@@ -44,7 +45,10 @@ def install_stream(parts, gap=0.02):
 _t0 = CLOCK()
 
 # 1. a full turn produces audio and stamps every stage
-install_stream(["今天", "天气", "真好。", "我们", "一起", "出去玩", "吧。"])
+# Sentences are >= 18 chars each, so the turn's splitter (config.SENTENCE_MIN_CHARS)
+# really cuts two of them instead of merging.
+install_stream(["今天的天气", "真的很不错，", "我们一起", "出去玩吧。",
+                "明天我们还", "可以一起去公园里散步聊天吧。"])
 bridge = Bridge(fake_tts(0.05))
 turn = bridge.begin("今天天气怎么样", Timers())
 chunks = list(turn.pcm_chunks())

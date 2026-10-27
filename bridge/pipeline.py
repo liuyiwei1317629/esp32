@@ -1,3 +1,4 @@
+import os
 import queue
 import threading
 import time
@@ -41,7 +42,11 @@ class Turn:
         self.user_text = user_text
         self.timers = timers
         self.session_id = session_id
-        self.splitter = SentenceSplitter()
+        self.splitter = SentenceSplitter(
+            min_chars=config.SENTENCE_MIN_CHARS,
+            first_min_chars=config.SENTENCE_FIRST_MIN_CHARS,
+            second_min_chars=config.SENTENCE_SECOND_MIN_CHARS,
+            second_max_chars=config.SENTENCE_SECOND_MAX_CHARS)
         self.sentence_q = queue.Queue()
         self.audio_q = queue.Queue(maxsize=16)
         self.abort = threading.Event()
@@ -141,7 +146,13 @@ class Turn:
                     continue
                 if first:
                     self.timers.mark("first_sentence")
+                t_synth = time.perf_counter()
                 pcm, meta = self.bridge.tts.synthesize(sentence)
+                if os.environ.get("TTS_TRACE"):
+                    print("  tts_sentence chars=%d wall_ms=%d audio_ms=%d at_ms=%d"
+                          % (len(sentence), (time.perf_counter() - t_synth) * 1000,
+                             len(pcm) / 32, (t_synth - self.timers.t0) * 1000),
+                          flush=True)
                 if first:
                     self.timers.mark("first_tts_done")
                     self.stats["first_tts_ms"] = meta["tts_ms"]

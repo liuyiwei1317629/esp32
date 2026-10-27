@@ -1,8 +1,20 @@
 import base64
 import contextlib
 import json
+import os
 import sys
 import time
+
+# py311 is an embeddable build: its ._pth file leaves the script directory out
+# of sys.path, so our own modules have to be added by hand.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import config
+import winperf
+
+# Without this the process can be scheduled onto E-cores and synthesis runs at
+# RTF ~1.8 instead of ~0.8, which is slower than real time.
+winperf.unthrottle()
 
 COSYVOICE_REPO = r"C:\Users\DELL\voice-ai\CosyVoice"
 MODEL_DIR = r"C:\Users\DELL\voice-ai\models\CosyVoice-300M-SFT"
@@ -36,14 +48,15 @@ def to_pcm(tensor, rate):
 # CosyVoice prints model internals to stdout; keep that on stderr so our
 # stdout stays a clean JSON-lines channel.
 with contextlib.redirect_stdout(sys.stderr):
-    model = CosyVoice(MODEL_DIR, load_jit=False, load_trt=False, fp16=False)
+    model = CosyVoice(MODEL_DIR, load_jit=False, load_trt=False, fp16=config.COSYVOICE_FP16)
     speakers = model.list_available_spks()
     # Measured: the first synthesis after load costs 2694 ms where the same
     # sentence later costs 1441 ms. Pay that here, not in the user's first turn.
     for _ in model.inference_sft("好。", speakers[0], stream=False):
         pass
 
-write({"ready": True, "engine": "cosyvoice", "speakers": speakers, "source_rate": model.sample_rate})
+write({"ready": True, "engine": "cosyvoice", "speakers": speakers,
+       "source_rate": model.sample_rate, "fp16": config.COSYVOICE_FP16})
 
 for raw in sys.stdin.buffer:
     line = raw.strip()

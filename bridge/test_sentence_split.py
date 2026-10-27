@@ -53,4 +53,24 @@ assert got == ["第一句话足够长了吧。", "第二句也够长了吧。"],
 got = collect(chars("你先说第一句话吧。然后第二句也够长；第三句收尾了吧。"))
 assert got[-1] == "第三句收尾了吧。", got
 
-print("sentence_split: 8/8 passed")
+# 9. sentence two may break on a weak mark (keeps its synthesis shorter than
+#    sentence one's audio); sentence three waits for a strong mark again
+got = collect(
+    chars("今天天气真的很不错啊，我们一起去郊外玩吧。"
+          "顺便带上一些特别好吃的小零食和几瓶矿泉水，明天也可以再出去走走看看。"),
+    min_chars=18, first_min_chars=18, second_min_chars=20)
+assert got == [
+    "今天天气真的很不错啊，我们一起去郊外玩吧。",
+    "顺便带上一些特别好吃的小零食和几瓶矿泉水，",
+    "明天也可以再出去走走看看。",
+], got
+
+# 10. sentence two is force-cut at second_max_chars when it carries no
+#     punctuation at all; the remainder flows on as sentence three
+got = collect(list("甲" * 18 + "。" + "乙" * 40),
+              min_chars=18, first_min_chars=18,
+              second_min_chars=20, second_max_chars=26)
+assert [weight(s) for s in got] == [18, 26, 14], [weight(s) for s in got]
+assert "".join(got) == "甲" * 18 + "。" + "乙" * 40, got
+
+print("sentence_split: 10/10 passed")

@@ -85,6 +85,23 @@ DEEPSEEK_PRICE_OUT_CNY_PER_MTOK = _env_float(
 # back to a different voice is worse than waiting.
 COSYVOICE_TIMEOUT = _env_float("COSYVOICE_TIMEOUT", 9.0)
 COSYVOICE_SPEAKER = os.environ.get("COSYVOICE_SPEAKER", "中文女")
+# Every sentence >= 18 chars, first one included. Each synthesis call costs
+# ~0.6 s + ~0.11 s/char regardless of length, and the device starts playback
+# holding only sentence one: if synthesising sentence two takes longer than
+# sentence one's audio, the reply freezes at the start (measured 2026-10-27:
+# 4.10 s audio vs 4.78 s synth -> 23 underruns = 0.74 s of silence).
+# The second sentence therefore also breaks on weak marks at 20 chars, with a
+# 26-char ceiling that forces a cut even when the LLM writes no punctuation:
+# synth(s2) then stays under 3.5 s, i.e. under the 3.3-4.8 s audio of a natural
+# 21-31 char first sentence.
+SENTENCE_MIN_CHARS = _env_int("SENTENCE_MIN_CHARS", 18)
+SENTENCE_FIRST_MIN_CHARS = _env_int("SENTENCE_FIRST_MIN_CHARS", 18)
+SENTENCE_SECOND_MIN_CHARS = _env_int("SENTENCE_SECOND_MIN_CHARS", 20)
+SENTENCE_SECOND_MAX_CHARS = _env_int("SENTENCE_SECOND_MAX_CHARS", 26)
+# Measured 2026-10-27 on the 3060 laptop: autocast fp16 gave no speedup
+# (RTF 0.91-0.93 vs 0.78-0.97 in fp32, i.e. inside the noise), so it stays off
+# until something proves otherwise.
+COSYVOICE_FP16 = bool(_env_int("COSYVOICE_FP16", 0))
 EDGE_VOICE = os.environ.get("EDGE_VOICE", "zh-CN-XiaoxiaoNeural")
 
 DEFAULT_PERSONA = "你是一只温柔的陪伴小机器，说话自然口语化，句子短，不用列表和markdown。"

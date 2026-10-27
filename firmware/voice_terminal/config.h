@@ -71,6 +71,9 @@ static constexpr bool MIC_I2S_SLOT_LEFT  = true;  // 假设话筒在左声道（
 static constexpr size_t   PLAY_STREAM_BYTES_MAX = 98304; // 3 s
 static constexpr size_t   PLAY_STREAM_BYTES_MID = 65536; // 2 s
 static constexpr size_t   PLAY_STREAM_BYTES    = 32768;  // 1 s 兜底
+// 起始水位只决定"多晚开播"，不决定"开局有多少存款"：bridge 首句是整段突发到达，
+// 播放一开手里就握着整句音频（实测 4~5 s），水位设 160 ms 还是 1.8 s 都一样。
+// 实测（2026-10-27）：1.8 s 水位对开头缺口无效，已回退。
 static constexpr size_t   PLAY_PREBUFFER_BYTES = 5120;   // 160 ms 起始水位，达到才开 I2S TX
 static constexpr size_t   PLAY_FRAME_BYTES     = 1024;   // 音频任务每次写 I2S 的粒度（32 ms）
 static constexpr uint32_t PLAY_READ_TIMEOUT_MS = 50;     // 流缓冲读超时；超时即 underrun 写静音

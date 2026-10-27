@@ -9,6 +9,12 @@ import time
 import edge_tts
 import imageio_ffmpeg
 
+import winperf
+
+# Same efficiency-mode trap as the CosyVoice worker: without this the process
+# can be pinned to E-cores, and edge synthesis loses its latency advantage.
+winperf.unthrottle()
+
 OUT_RATE = 16000
 VOICE = "zh-CN-XiaoxiaoNeural"
 

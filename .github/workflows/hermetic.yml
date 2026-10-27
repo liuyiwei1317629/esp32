@@ -23,7 +23,7 @@ jobs:
             test_memory_context test_memory_maintenance test_memory_admin \
             test_memory_writer test_memory_integration \
             test_brains test_brain_stream test_server_brain test_usage test_server_usage \
-            test_context_builder test_commands test_local_commands
+            test_context_builder test_commands test_local_commands test_winperf
       - name: Script self-tests
         run: |
           python bridge/test_sentence_split.py

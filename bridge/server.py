@@ -20,6 +20,7 @@ import memory_store
 import memory_writer
 import pipeline
 import usage
+import winperf
 from pipeline import Bridge, Timers
 from tts import Tts
 
@@ -364,6 +365,8 @@ def record_mic(args, bridge, asr):
 
 def main():
     config.force_utf8_output()
+    # SenseVoice runs in this process; keep it off the E-cores.
+    winperf.unthrottle()
     ap = argparse.ArgumentParser()
     ap.add_argument("--serve", action="store_true", help="listen for ESP32 requests")
     ap.add_argument("--text", help="skip ASR and speak this reply")
