@@ -450,6 +450,18 @@ class ServerWriteIntegrationTest(unittest.TestCase):
         self.assertFalse(server.enqueue_memory(bridge, turn))
         writer.enqueue.assert_not_called()
 
+    def test_enqueue_memory_skips_local_plugin_turns(self):
+        turn = SimpleNamespace(
+            completed=True, local_command="", local_plugin=True, gen=1,
+            session_id="dev1", user_text="讲个笑话",
+            reply_text="本地可以做简单回答。",
+            stats={"finish_reason": "stop", "done": True})
+        writer = mock.Mock()
+        bridge = SimpleNamespace(memory_writer=writer)
+
+        self.assertFalse(server.enqueue_memory(bridge, turn))
+        writer.enqueue.assert_not_called()
+
 
 class ServerMemoryWiringTest(unittest.TestCase):
     def setUp(self):
@@ -654,6 +666,25 @@ class ServerMemoryWiringTest(unittest.TestCase):
         self.assertIsInstance(bridge.token_cache, memory_score.TokenCache)
         self.assertIsInstance(bridge.memory_writer, memory_writer.MemoryWriter)
         self.assertTrue(bridge.memory_writer.dry_run)
+
+    def test_build_bridge_prints_memory_status(self):
+        out = io.StringIO()
+        with mock.patch.object(config, "MEMORY_ENABLED", False), \
+                contextlib.redirect_stdout(out):
+            server.build_bridge(FakeTts())
+        self.assertIn("memory: disabled", out.getvalue())
+
+        out = io.StringIO()
+        with mock.patch.object(config, "MEMORY_ENABLED", True), \
+                mock.patch.object(config, "MEMORY_DIR", self.root), \
+                mock.patch.object(config, "MEMORY_DRY_RUN", False), \
+                contextlib.redirect_stdout(out):
+            bridge = server.build_bridge(FakeTts())
+        self.addCleanup(bridge.memory_writer.stop)
+        rendered = out.getvalue()
+        self.assertIn("memory: enabled", rendered)
+        self.assertIn("dir=" + self.root, rendered)
+        self.assertIn("dry_run=False", rendered)
 
     def test_build_bridge_warns_when_schema_is_newer(self):
         with open(os.path.join(self.root, "state.json"), "w",

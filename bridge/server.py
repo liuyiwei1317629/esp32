@@ -56,9 +56,14 @@ def report(timers, turn, text=None):
         print("  user: %s" % text)
     if getattr(turn, "local_command", ""):
         print("  local_command=%s" % turn.local_command)
+    if getattr(turn, "local_plugin", False):
+        mode = ("fixed-fallback" if getattr(turn, "local_plugin_failed", False)
+                else "model")
+        print("  local_plugin=%s" % mode)
     if turn.error:
         print("  ERROR %s" % turn.error)
     for key, label in (("asr", "ASR完成"), ("first_token", "LLM首字"),
+                       ("local_fallback", "本地接管"),
                        ("first_sentence", "收满首句"), ("first_tts_done", "首句合成完"),
                        ("first_byte", "首字节送达")):
         print("  %-12s %s" % (label, fmt_ms(m.get(key))))
@@ -96,6 +101,7 @@ def warn_if_memory_read_only(store):
 
 def build_bridge(tts):
     if not config.MEMORY_ENABLED:
+        print("memory: disabled")
         return Bridge(tts)
     store = memory_store.MemoryStore(config.MEMORY_DIR)
     warn_if_memory_read_only(store)
@@ -105,6 +111,7 @@ def build_bridge(tts):
         debug=config.MEMORY_DEBUG,
         maintenance=memory_maintenance.MemoryMaintenance(store),
     )
+    print("memory: enabled dir=%s dry_run=%s" % (config.MEMORY_DIR, writer.dry_run))
     return Bridge(
         tts,
         memory_store=store,
@@ -120,6 +127,9 @@ def enqueue_memory(bridge, turn):
         return False
     # 报时/停止等本地命令不是对话内容，不写入长期记忆。
     if getattr(turn, "local_command", ""):
+        return False
+    # 本地应急模式没有云端人格与长期记忆，不能污染记忆档案。
+    if getattr(turn, "local_plugin", False):
         return False
     try:
         return writer.enqueue(memory_writer.WriteJob.from_turn(turn))

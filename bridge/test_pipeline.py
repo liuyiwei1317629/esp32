@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
 import llm
+import local_plugin
 import pipeline
 from pipeline import Bridge, Timers
 
@@ -106,4 +107,97 @@ assert turn.local_command == "time", turn.local_command
 assert turn.reply_text.startswith("现在是"), turn.reply_text
 assert chunks, "local time reply produced no audio"
 
-print("pipeline: 6/6 passed")
+# 7. with the local plugin off, a cloud failure keeps the existing error path
+def cloud_down(messages, on_content, abort=None):
+    raise RuntimeError("cloud down")
+
+
+def must_not_run(text, on_content, abort=None):
+    raise AssertionError("local plugin must not run here")
+
+
+llm.stream_reply = cloud_down
+local_plugin.stream_reply = must_not_run
+old_enabled = config.LOCAL_PLUGIN_ENABLED
+config.LOCAL_PLUGIN_ENABLED = False
+try:
+    bridge = Bridge(fake_tts(0.01))
+    turn = bridge.begin("随便聊", Timers())
+    chunks = list(turn.pcm_chunks())
+finally:
+    config.LOCAL_PLUGIN_ENABLED = old_enabled
+assert chunks == [], "disabled local plugin produced audio"
+assert turn.error and "cloud down" in turn.error, turn.error
+assert not turn.local_plugin
+
+# 8. when every cloud profile fails before any text, the local model answers
+local_calls = []
+
+
+def local_ok(text, on_content, abort=None):
+    local_calls.append(text)
+    on_content("本地可以做简单回答。")
+    return {"profile": "local", "fallback_used": True, "chunks": 1,
+            "content_chars": 10, "finish_reason": "stop",
+            "usage": {"prompt_tokens": 20, "completion_tokens": 5},
+            "total_seconds": 0.1}
+
+
+llm.stream_reply = cloud_down
+local_plugin.stream_reply = local_ok
+config.LOCAL_PLUGIN_ENABLED = True
+try:
+    bridge = Bridge(fake_tts(0.01))
+    turn = bridge.begin("讲个笑话", Timers())
+    chunks = list(turn.pcm_chunks())
+finally:
+    config.LOCAL_PLUGIN_ENABLED = old_enabled
+assert chunks, "local fallback produced no audio"
+assert turn.error is None, turn.error
+assert turn.local_plugin and not turn.local_plugin_failed
+assert turn.stats["profile"] == "local"
+assert turn.stats["chunks"] == 1
+assert turn.reply_text == "本地可以做简单回答。"
+assert local_calls == ["讲个笑话"]
+assert "local_fallback" in turn.timers.marks, turn.timers.marks
+
+# 9. once the cloud has already spoken, the local model must not take over
+def half_then_fail(messages, on_content, abort=None):
+    on_content("云端已经说了半句")
+    raise RuntimeError("cloud stream dropped")
+
+
+llm.stream_reply = half_then_fail
+local_plugin.stream_reply = must_not_run
+config.LOCAL_PLUGIN_ENABLED = True
+try:
+    bridge = Bridge(fake_tts(0.01))
+    turn = bridge.begin("讲个故事", Timers())
+    chunks = list(turn.pcm_chunks())
+finally:
+    config.LOCAL_PLUGIN_ENABLED = old_enabled
+assert chunks == [], "half a cloud reply was mixed with local audio"
+assert turn.error and "cloud stream dropped" in turn.error, turn.error
+assert not turn.local_plugin
+
+# 10. when the local model fails too, speak one fixed sentence and no error
+def local_down(text, on_content, abort=None):
+    raise RuntimeError("ollama down")
+
+
+llm.stream_reply = cloud_down
+local_plugin.stream_reply = local_down
+config.LOCAL_PLUGIN_ENABLED = True
+try:
+    bridge = Bridge(fake_tts(0.01))
+    turn = bridge.begin("你在吗", Timers())
+    chunks = list(turn.pcm_chunks())
+finally:
+    config.LOCAL_PLUGIN_ENABLED = old_enabled
+assert chunks, "fixed fallback sentence produced no audio"
+assert turn.error is None, turn.error
+assert turn.local_plugin and turn.local_plugin_failed
+assert turn.reply_text == local_plugin.FALLBACK_REPLY
+assert turn.stats["profile"] == "local"
+
+print("pipeline: 10/10 passed")

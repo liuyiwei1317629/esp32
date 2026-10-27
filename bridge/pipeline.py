@@ -7,6 +7,7 @@ import commands
 import config
 import llm
 import local_commands
+import local_plugin
 import memory_context
 from sentence_split import SentenceSplitter
 
@@ -56,6 +57,8 @@ class Turn:
         self.completed = False
         self.selected_ids = []
         self.local_command = ""
+        self.local_plugin = False
+        self.local_plugin_failed = False
         self._staged = False
 
     @property
@@ -92,24 +95,66 @@ class Turn:
             self.sentence_q.put(tail)
         return True
 
-    def _stream_llm(self):
-        def on_content(text):
-            if self.stale:
-                return
-            self.reply_text += text
-            if not self._staged:
-                self._staged = True
-                self.timers.mark("first_token")
-            for sentence in self.splitter.feed(text):
-                self.sentence_q.put(sentence)
-
-        messages = self._messages()
-        self.stats = llm.stream_reply(messages, on_content, abort=self.abort)
+    def _on_content(self, text):
         if self.stale:
             return
+        self.reply_text += text
+        if not self._staged:
+            self._staged = True
+            self.timers.mark("first_token")
+        for sentence in self.splitter.feed(text):
+            self.sentence_q.put(sentence)
+
+    def _flush_tail(self):
         tail = self.splitter.flush()
         if tail:
             self.sentence_q.put(tail)
+
+    def _stream_llm(self):
+        messages = self._messages()
+        try:
+            self.stats = llm.stream_reply(messages, self._on_content,
+                                          abort=self.abort)
+        except Exception:
+            # Never mix two brains in one reply: once the cloud has spoken
+            # anything, a failure stays a failure.
+            if (not config.LOCAL_PLUGIN_ENABLED or self.stale
+                    or self.reply_text):
+                raise
+            self._stream_local()
+            return
+        if self.stale:
+            return
+        self._flush_tail()
+
+    def _stream_local(self):
+        self.local_plugin = True
+        self.timers.mark("local_fallback")
+        try:
+            stats = local_plugin.stream_reply(
+                self.user_text, self._on_content, abort=self.abort)
+        except Exception as exc:
+            if self.stale:
+                self.stats.update({"profile": "local", "fallback_used": True,
+                                   "aborted": True})
+                return
+            detail = "%s: %s" % (type(exc).__name__, exc)
+            self.stats.update({"profile": "local", "fallback_used": True,
+                               "local_error": detail})
+            if self.reply_text:
+                self._flush_tail()
+                return
+            self.local_plugin_failed = True
+            self.reply_text = local_plugin.FALLBACK_REPLY
+            self.stats["content_chars"] = len(self.reply_text)
+            for sentence in self.splitter.feed(self.reply_text):
+                self.sentence_q.put(sentence)
+            self._flush_tail()
+            return
+        if self.stale:
+            return
+        self.stats.update(stats or {})
+        self._flush_tail()
 
     def _messages(self):
         if config.MEMORY_ENABLED and self.bridge.memory_store is not None:

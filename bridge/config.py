@@ -56,6 +56,16 @@ BRAINS_CONFIG_FILE = os.environ.get(
 )
 BRAIN_PROFILE = os.environ.get("BRAIN_PROFILE", "").strip() or None
 
+# Emergency brain: only after every cloud profile fails before any text. It gets
+# a functional prompt, never the companion persona or long-term memory.
+LOCAL_PLUGIN_ENABLED = os.environ.get("LOCAL_PLUGIN_ENABLED", "0") == "1"
+LOCAL_PLUGIN_BASE_URL = os.environ.get(
+    "LOCAL_PLUGIN_BASE_URL", "http://127.0.0.1:11434/v1"
+)
+LOCAL_PLUGIN_MODEL = os.environ.get("LOCAL_PLUGIN_MODEL", "qwen3.5:2b-q4_K_M")
+LOCAL_PLUGIN_MAX_TOKENS = _env_int("LOCAL_PLUGIN_MAX_TOKENS", 160)
+LOCAL_PLUGIN_TIMEOUT_S = _env_float("LOCAL_PLUGIN_TIMEOUT_S", 15.0)
+
 USAGE_LEDGER_FILE = os.environ.get(
     "USAGE_LEDGER_FILE", os.path.join(os.path.expanduser("~"), ".voice-ai", "usage.jsonl")
 )
