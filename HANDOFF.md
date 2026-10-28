@@ -90,7 +90,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
 - **测试环境口径**：脚本自检 29/29（sentence_split 10、llm 9、pipeline 10）。**单元回归必须用显式模块清单**：35 个 unittest 模块共 **528 例全过**（2026-10-28 实测），其中记忆 204 例、屏幕 35 例（`test_screen_frames_build/config/compose/hub/http/server_hooks`，**只能在 Windows 本机跑**：要 PIL、微软雅黑和 20 MB 帧库，不进 `hermetic.yml`）；2026-10-28 新增 `test_console_restart.py` 9 例、`test_songs.py` 11 例、`test_playback.py` 9 例、`test_console_volume.py` 5 例，一起跑。加上 3 个脚本自检，hermetic 文件再加 2 个。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
 - 性能基线（以 `bridge/README.md` 实测节为准）：首字节常见 4.4–5.2 s（2026-10-27 切句定案：首句 ≥18 字、第二句 ≥20 字可逗号切且 26 字硬上限、其余 ≥18 字；真机 69.1 s 回复 0 次断流，22.8–81.4 s 共七轮 0 次，修前 46 次）；CosyVoice 快态 125–215 ms/字，慢态可到 300–558 ms/字，重启后恢复；DeepSeek TTFT 0.1–1.0 s；ASR 在 CPU 上约 0.2–0.5 s。
 - `~/.deepseek/key` 与 `~/.deepseek/bridge_token` 已配置；只能确认存在，不要读取或打印内容。
-- 根 `README.md` 与 `bridge/README.md` 的「云端为主 + 本地功能插件」节已同步；记忆与固件的最终口径以本文和 `bridge/README.md` 记忆节为准。
+- 「云端为主 + 本地功能插件」的口径见 `bridge/README.md`；记忆与固件的最终口径以本文和 `bridge/README.md` 记忆节为准。根 `README.md` 只是指向 `项目总结.md` 的入口页。
 
 ### 1.2 还差什么（按优先级）
 
