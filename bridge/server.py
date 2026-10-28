@@ -997,29 +997,31 @@ def main():
         llm.set_profile(args.brain)
 
     tts = Tts(start_cosyvoice=not args.no_cosyvoice, start_feiyu=not args.no_feiyu)
-    bridge = build_bridge(tts)
-    print("edge worker: %s" % ("ready" if tts.edge.ready else tts.edge.dead_reason))
-    if not args.no_feiyu:
-        print("feiyu worker: loading in background in WSL (~90 s cold)")
-    elif not args.no_cosyvoice:
-        print("cosyvoice worker: loading in background (~54 s cold)")
+    try:
+        bridge = build_bridge(tts)
+        print("edge worker: %s" % ("ready" if tts.edge.ready else tts.edge.dead_reason))
+        if not args.no_feiyu:
+            print("feiyu worker: loading in background in WSL (~90 s cold)")
+        elif not args.no_cosyvoice:
+            print("cosyvoice worker: loading in background (~54 s cold)")
 
-    asr = None
-    if args.file or args.mic or args.serve:
-        from asr_engine import Asr
+        asr = None
+        if args.file or args.mic or args.serve:
+            from asr_engine import Asr
 
-        print("loading SenseVoice on %s..." % args.asr_device)
-        asr = Asr(args.asr_device)
+            print("loading SenseVoice on %s..." % args.asr_device)
+            asr = Asr(args.asr_device)
 
-    if args.serve:
-        serve(bridge, asr)
-    elif args.text or args.file:
-        run_local(args, bridge, asr)
-    elif args.mic:
-        record_mic(args, bridge, asr)
-    else:
-        ap.print_help()
-    tts.stop()
+        if args.serve:
+            serve(bridge, asr)
+        elif args.text or args.file:
+            run_local(args, bridge, asr)
+        elif args.mic:
+            record_mic(args, bridge, asr)
+        else:
+            ap.print_help()
+    finally:
+        tts.stop()
 
 
 if __name__ == "__main__":
