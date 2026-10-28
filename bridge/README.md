@@ -32,6 +32,7 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
   - `GET /api/memory[?text=1]` 默认只回计数，`text=1` 才回记忆原文
   - `GET /api/usage`（2026-10-28 新增）：只读汇总 `~/.voice-ai/usage.jsonl`，回今日/本月/累计金额、轮数、未计价轮数、按大脑拆分；日/月界按本机时区算。**只看账，不设上限、不拦调用**。调试台顶栏「花费」胶囊就是它
   - `GET /api/songs`、`POST /api/songs?title=&name=`、`POST /api/songs/delete`（2026-10-28 新增，loopback-only）：看歌单 / 加歌 / 删歌。加歌 body 是**原始音频字节**，`name` 是原文件名（决定格式），`title` 留空就用文件名；服务端转成 16 kHz 单声道 s16le 存进 `songs/`，只收 wav/mp3/flac/ogg，≤32 MB、≤10 分钟，超过回 400/413。删除 body `{"file":"x.pcm"}`，文件也一起删。歌单每轮现读，加/删**立刻生效、不用重启**。调试台「歌曲」按钮是它的 UI
+  - `GET /api/persona`、`POST /api/persona`（2026-10-28 新增，loopback-only）：看 / 改人设词。GET 回 `text`（当前生效值）、`default`、`max_chars`、`custom`（有没有自定义文件）、`file`；POST body `{"text":"..."}`，首尾空白会去掉，**空文本 = 恢复默认**（删除 `~/.voice-ai/persona.txt`）。上限 `PERSONA_MAX_CHARS = 120` 字（与记忆链路一直用的相同），超了回 400 并报实际字数；`pipeline.Turn._messages()` 每轮现读 `config.persona_text()`，保存后**下一轮生效、不用重启**。调试台「人设」按钮是它的 UI
   - `POST /api/text` body `{"text":"..."}`，跳 ASR，其余走同一条流水线
   - `POST /shutdown` / `POST /restart`（2026-10-28 新增，loopback-only）：关闭 / 重启本机 bridge。重启会先拉一个分离的等待进程（`bridge/relaunch.py`），等旧进程连 worker 一起退出、端口让出来后，再按桌面的 `start-bridge.cmd` 开一个新控制台窗口；旧进程退出前先回 200，页面自动重连
   - `POST /api/volume`（2026-10-28 新增，loopback-only）：body `{"level":30|50|70|100}`，bridge 在发 PCM 前按档位衰减（原唱和 TTS 都走这条路），档位存 `~/.voice-ai/playback.json`；固件增益不动，所以只影响响度、不改音色
@@ -58,7 +59,7 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
 .venv/Scripts/python.exe bridge/server.py --text "今天好累啊" --play --no-cosyvoice
 ```
 
-单元测试：`test_sentence_split.py`（10 项切分规则）、`test_llm.py`（9 项 SSE 解析）、`test_pipeline.py`（10 项并发、打断、本地命令与应急兜底）。这三个是**脚本式**自检（直接 `python test_x.py` 跑，导入即执行），不要放进 `unittest` 清单——它们会在导入时改写 `llm.stream_reply` / `local_plugin.stream_reply` 并污染同进程的其他模块。其余 `unittest` 模块（2026-10-27 新增 `test_console.py` 24 例，2026-10-28 新增 `test_console_restart.py` 9 例、`test_playback.py` 9 例、`test_console_volume.py` 5 例、屏幕 6 模块 35 例；`test_songs.py` 由 6 例增至 11 例）用显式清单跑，共 **35 模块 528 例**，见 `HANDOFF.md` §14.3。屏幕那 6 个**只能在 Windows 本机跑**（要 PIL、微软雅黑和 20 MB 帧库），不要加进 `hermetic.yml`。
+单元测试：`test_sentence_split.py`（10 项切分规则）、`test_llm.py`（9 项 SSE 解析）、`test_pipeline.py`（10 项并发、打断、本地命令与应急兜底）。这三个是**脚本式**自检（直接 `python test_x.py` 跑，导入即执行），不要放进 `unittest` 清单——它们会在导入时改写 `llm.stream_reply` / `local_plugin.stream_reply` 并污染同进程的其他模块。其余 `unittest` 模块（2026-10-27 新增 `test_console.py` 24 例，2026-10-28 新增 `test_console_restart.py` 9 例、`test_playback.py` 9 例、`test_console_volume.py` 5 例、屏幕 6 模块 35 例、`test_emotion.py` 13 例、`test_server_emotion.py` 3 例、`test_console_songs.py` 8 例、`test_persona.py` 10 例；`test_songs.py` 由 6 例增至 24 例）用显式清单跑，共 **43 模块 594 例**，见 `HANDOFF.md` §14.3。屏幕那 6 个**只能在 Windows 本机跑**（要 PIL、微软雅黑和 20 MB 帧库），不要加进 `hermetic.yml`。
 
 ## 调试台（2026-10-27）
 
@@ -122,7 +123,7 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
 - **色阶必须显式 `in_range=tv:out_range=pc`**：源 webm 是 tv 范围（黑 = Y16）且没有 range 元数据，不写这个黑底会变成 #101010
 - 换动画名要同步 `bridge/tools/frame_names.txt` 和 `screen_hub.py` 里的池子常量
 
-测试：`test_screen_frames_build.py`、`test_screen_config.py`、`test_screen_compose.py`、`test_screen_hub.py`、`test_screen_http.py`、`test_screen_server_hooks.py`（后两个起真 HTTP 服务，端口 0）；情绪：`test_emotion.py`、`test_server_emotion.py`；歌单接口：`test_songs.py`、`test_console_songs.py`。
+测试：`test_screen_frames_build.py`、`test_screen_config.py`、`test_screen_compose.py`、`test_screen_hub.py`、`test_screen_http.py`、`test_screen_server_hooks.py`（后两个起真 HTTP 服务，端口 0）；情绪：`test_emotion.py`、`test_server_emotion.py`；歌单接口：`test_songs.py`、`test_console_songs.py`；人设词：`test_persona.py`。
 
 固件侧依赖 **TJpg_Decoder 1.1.0**，本机改过两处（只解内存 JPEG，省 14 KB flash）：
 

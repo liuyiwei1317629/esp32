@@ -148,6 +148,41 @@ EDGE_VOICE = os.environ.get("EDGE_VOICE", "zh-CN-XiaoxuanNeural")
 
 DEFAULT_PERSONA = "你是一只温柔的陪伴小机器，说话自然口语化，句子短，不用列表和markdown。"
 
+# 人设词：调试台可改，存成纯文本文件。上限仍是记忆链路一直用的 120 字——
+# 每轮都要为它付 token，也占 1050 token 的记忆预算。
+PERSONA_FILE = os.environ.get(
+    "PERSONA_FILE", os.path.join(os.path.expanduser("~"), ".voice-ai", "persona.txt")
+)
+PERSONA_MAX_CHARS = _env_int("PERSONA_MAX_CHARS", 120)
+
+
+def persona_text():
+    """当前人设词：文件优先，没有/读失败/为空就用内置那句。"""
+    try:
+        with open(PERSONA_FILE, "r", encoding="utf-8") as fh:
+            text = fh.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return DEFAULT_PERSONA
+    return text or DEFAULT_PERSONA
+
+
+def save_persona(text):
+    """写人设词；空白文本 = 恢复默认（删文件）。返回实际生效的值。"""
+    text = (text or "").strip()
+    if not text:
+        try:
+            os.remove(PERSONA_FILE)
+        except OSError:
+            pass
+        return DEFAULT_PERSONA
+    parent = os.path.dirname(os.path.abspath(PERSONA_FILE))
+    os.makedirs(parent, exist_ok=True)
+    tmp = PERSONA_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text + "\n")
+    os.replace(tmp, PERSONA_FILE)
+    return text
+
 
 def api_key():
     env = os.environ.get("DEEPSEEK_API_KEY")

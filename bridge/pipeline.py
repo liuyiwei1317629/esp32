@@ -162,6 +162,7 @@ class Turn:
         self._flush_tail()
 
     def _messages(self):
+        persona = config.persona_text()
         messages = None
         if config.MEMORY_ENABLED and self.bridge.memory_store is not None:
             writer = self.bridge.memory_writer
@@ -169,7 +170,7 @@ class Turn:
                             if writer is not None else None)
             try:
                 built, info = memory_context.build_for_turn(
-                    self.bridge.memory_store, config.DEFAULT_PERSONA,
+                    self.bridge.memory_store, persona,
                     self.session_id, self.user_text,
                     budget_tokens=config.MEMORY_INPUT_BUDGET_TOKENS,
                     recent_cache=recent_cache,
@@ -185,7 +186,7 @@ class Turn:
             except Exception:
                 pass
         if messages is None:
-            messages = [{"role": "system", "content": config.DEFAULT_PERSONA},
+            messages = [{"role": "system", "content": persona},
                         {"role": "user", "content": self.user_text}]
         return songs.augment_messages(self._with_files(messages))
 

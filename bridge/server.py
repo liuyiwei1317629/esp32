@@ -323,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/memory/fact", "/api/memory/pin",
                          "/api/memory/delete", "/shutdown", "/restart",
                          "/api/volume", "/screen/key",
-                         "/api/songs", "/api/songs/delete",
+                         "/api/songs", "/api/songs/delete", "/api/persona",
                          "/api/permissions/add", "/api/permissions/toggle",
                          "/api/permissions/remove") or not self._authorized():
             return self._reply(401, b'{"error":"bad auth"}', close=True)
@@ -347,6 +347,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/volume":
             return self._handle_volume(body)
+
+        if route == "/api/persona":
+            return self._handle_persona(body)
 
         if route == "/brain":
             return self._handle_brain(body)
@@ -407,6 +410,34 @@ class Handler(BaseHTTPRequestHandler):
         print("  song add: %s (%s)" % (entry["file"], entry["title"]))
         sys.stdout.flush()
         return self._reply_json(200, entry)
+
+    def _handle_persona(self, body):
+        """人设词：只能本机改；空文本等于恢复默认。"""
+        if not self._is_loopback():
+            return self._reply(403, b'{"error":"persona is loopback-only"}')
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            text = payload.get("text", "")
+        except (UnicodeDecodeError, ValueError, AttributeError):
+            return self._reply(400, b'{"error":"bad json"}')
+        if not isinstance(text, str):
+            return self._reply(400, b'{"error":"text must be a string"}')
+        text = text.strip()
+        if len(text) > config.PERSONA_MAX_CHARS:
+            return self._reply_json(400, {
+                "error": "最多 %d 字，现在是 %d 字"
+                         % (config.PERSONA_MAX_CHARS, len(text))})
+        config.save_persona(text)
+        return self._reply_json(200, self._persona_payload())
+
+    def _persona_payload(self):
+        return {
+            "text": config.persona_text(),
+            "default": config.DEFAULT_PERSONA,
+            "max_chars": config.PERSONA_MAX_CHARS,
+            "custom": os.path.isfile(config.PERSONA_FILE),
+            "file": config.PERSONA_FILE,
+        }
 
     def _handle_shutdown(self):
         """一键关闭：只允许本机。先回响应，再在后台收摊，避免客户端拿不到 200。"""
@@ -744,8 +775,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(503, b'{"error":"screen disabled"}', close=True)
             return screen_http.write_stream(self, self.screen_streamer)
         if route not in ("/api/state", "/api/turns", "/api/memory",
-                         "/api/usage", "/api/songs", "/api/permissions",
-                         "/api/permissions/dirs"):
+                         "/api/usage", "/api/songs", "/api/persona",
+                         "/api/permissions", "/api/permissions/dirs"):
             return self._reply(404, b'{"error":"not found"}')
         if not self._authorized():
             return self._reply(401, b'{"error":"bad auth"}', close=True)
@@ -759,6 +790,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._is_loopback():
                 return self._reply(403, b'{"error":"songs are loopback-only"}')
             return self._reply_json(200, {"songs": songs.catalog()})
+        if route == "/api/persona":
+            if not self._is_loopback():
+                return self._reply(403, b'{"error":"persona is loopback-only"}')
+            return self._reply_json(200, self._persona_payload())
         if route.startswith("/api/permissions"):
             # 目录清单暴露本机文件结构，只给本机页面看。
             if not self._is_loopback():

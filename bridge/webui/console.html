@@ -202,6 +202,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
       <option value="100">音量 满</option>
     </select>
     <button id="btnMem" title="查看五层记忆的实际内容">记忆</button>
+    <button id="btnPersona" title="改人设词：你是谁、怎么说话（最多 120 字，下一轮生效）">人设</button>
     <button id="btnSongs" title="看歌单、加歌、删歌（上传后自动转成板子能放的格式）">歌曲</button>
     <button id="btnPerm" title="手动选择 AI 只能读哪些文件夹（只读，默认没有）">权限</button>
     <button id="btnStop" class="danger">打断</button>
@@ -1238,8 +1239,8 @@ function showRestartScreen() {
   S.quit = true;
   for (const id of pollTimers) clearInterval(id);
   try { if (S.playSrc) S.playSrc.stop(); } catch (e) {}
-  for (const id of ["#btnSend", "#btnMic", "#btnStop", "#btnPerm", "#btnSongs",
-                    "#btnRestart", "#btnQuit", "#volumeSel"]) $(id).disabled = true;
+  for (const id of ["#btnSend", "#btnMic", "#btnStop", "#btnPerm", "#btnPersona",
+                    "#btnSongs", "#btnRestart", "#btnQuit", "#volumeSel"]) $(id).disabled = true;
   $("#restartScreen").hidden = false;
   const started = Date.now();
   const timer = setInterval(async () => {
@@ -1916,6 +1917,160 @@ function songRow(r) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 人设词面板                                                          */
+/* ------------------------------------------------------------------ */
+const PERSONA = { text: "", defaultText: "", maxChars: 120, custom: false };
+
+async function showPersona() {
+  try {
+    const res = await api("/api/persona");
+    if (res.status === 404) { renderPersonaStale(); return; }
+    const data = await res.json();
+    if (data.error) { toast("读人设失败: " + data.error); return; }
+    PERSONA.text = data.text || "";
+    PERSONA.defaultText = data.default || "";
+    PERSONA.maxChars = Number(data.max_chars) || 120;
+    PERSONA.custom = !!data.custom;
+    renderPersona();
+  } catch (e) { if (String(e.message) !== "401") toast("读人设失败"); }
+}
+
+function renderPersonaStale() {
+  const body = $("#turnBody");
+  body.innerHTML = "";
+  $("#turnHint").textContent = "人设 · 需要重启";
+  const box = mk("div", "bubble reply");
+  box.appendChild(mk("div", "who", "服务端还是旧代码"));
+  box.appendChild(mk("div", "",
+    "页面里已经有「人设」按钮，但正在跑的 bridge 还不认识 /api/persona（返回 404）。"
+    + "点下面的「重启桥」等 1–3 分钟就能改人设词。已经保存过的人设词不会丢。"));
+  const row = mk("div", "row");
+  row.style.marginTop = "9px";
+  const btn = mk("button", "", "重启桥");
+  btn.onclick = () => doRestart();
+  row.appendChild(btn);
+  box.appendChild(row);
+  body.appendChild(box);
+}
+
+function personaRules() {
+  const box = mk("div", "bubble reply");
+  box.style.marginBottom = "9px";
+  const who = mk("div", "who");
+  who.appendChild(mk("span", "tag", "人设词的要求"));
+  box.appendChild(who);
+  const rules = [
+    "只写「你是谁、怎么说话」：名字、称呼、语气、句子长短；不写命令、不写业务规则",
+    "最多 120 字 —— 超了保存会被拒绝，输入时下面的字数会变红",
+    "这段每轮都要付 token，也计入 1050 token 的记忆预算，越短越省",
+    "本地 2B 应急兜底用自己的固定提示，不受这里影响",
+    "保存后下一轮生效，不用重启；点「恢复默认」可以随时退回",
+  ];
+  const ul = document.createElement("ul");
+  ul.style.cssText = "margin:6px 0 0 18px;padding:0";
+  for (const t of rules) ul.appendChild(mk("li", "", t));
+  box.appendChild(ul);
+  return box;
+}
+
+function renderPersona() {
+  const body = $("#turnBody");
+  body.innerHTML = "";
+  $("#turnHint").textContent = "人设 · 下一轮生效";
+
+  const head = mk("div", "metrics");
+  const addMetric = (k, v) => {
+    const box = mk("div", "metric");
+    box.appendChild(mk("div", "k", k));
+    box.appendChild(mk("div", "v", String(v)));
+    head.appendChild(box);
+  };
+  addMetric("当前字数", PERSONA.text.length);
+  addMetric("上限", PERSONA.maxChars + " 字");
+  addMetric("状态", PERSONA.custom ? "自定义" : "默认");
+  body.appendChild(head);
+
+  body.appendChild(personaRules());
+
+  const box = mk("div", "bubble reply");
+  const who = mk("div", "who");
+  who.appendChild(mk("span", "tag", "现在用的人设词"));
+  box.appendChild(who);
+  const area = document.createElement("textarea");
+  area.value = PERSONA.text;
+  area.rows = 4;
+  area.style.cssText = "width:100%;box-sizing:border-box;margin-top:5px";
+  const count = mk("div", "hint");
+  count.style.marginTop = "5px";
+  const save = mk("button", "primary", "保存");
+  const reset = mk("button", "", "恢复默认");
+
+  const paint = () => {
+    const n = area.value.trim().length;
+    const over = n > PERSONA.maxChars;
+    count.textContent = "字数 " + n + " / " + PERSONA.maxChars
+      + (over ? "（超出 " + (n - PERSONA.maxChars) + " 字，保存会被拒绝）" : "");
+    count.style.color = over ? "#e35d5d" : "";
+    save.disabled = over;
+  };
+  area.oninput = paint;
+  paint();
+  box.appendChild(area);
+  box.appendChild(count);
+
+  const actions = mk("div", "actions");
+  actions.style.marginTop = "8px";
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      const res = await api("/api/persona", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: area.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      PERSONA.text = data.text;
+      PERSONA.custom = !!data.custom;
+      toast("人设词已保存，下一轮生效");
+      renderPersona();
+    } catch (e) {
+      if (String(e.message) !== "401") toast("保存失败：" + e.message);
+      save.disabled = false;
+    }
+  };
+  reset.onclick = async () => {
+    if (PERSONA.custom && !confirm("恢复默认人设词？现在这段会被删掉。")) return;
+    reset.disabled = true;
+    try {
+      const res = await api("/api/persona", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      PERSONA.text = data.text;
+      PERSONA.custom = false;
+      toast("已恢复默认人设词");
+      renderPersona();
+    } catch (e) {
+      if (String(e.message) !== "401") toast("恢复失败：" + e.message);
+      reset.disabled = false;
+    }
+  };
+  actions.append(save, reset);
+  box.appendChild(actions);
+  body.appendChild(box);
+
+  const note = mk("div", "hint",
+    "存在本机 ~/.voice-ai/persona.txt，纯文本。空着保存也等于恢复默认。"
+    + "默认人设：" + PERSONA.defaultText);
+  note.style.marginTop = "10px";
+  body.appendChild(note);
+}
+
+/* ------------------------------------------------------------------ */
 /* 启动                                                                */
 /* ------------------------------------------------------------------ */
 async function boot() {
@@ -1955,6 +2110,7 @@ $("#btnRestart").onclick = doRestart;
 $("#btnQuit").onclick = doQuit;
 $("#volumeSel").onchange = setVolume;
 $("#btnMem").onclick = showMemory;
+$("#btnPersona").onclick = showPersona;
 $("#btnSongs").onclick = showSongs;
 $("#btnPerm").onclick = showPermissions;
 $("#chipBrain").onclick = toggleBrainMenu;
