@@ -192,6 +192,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
   <span class="chip" id="chipDevice"><span class="dot"></span>设备 <b>-</b></span>
   <span class="chip" id="chipFiles"><span class="dot"></span>文件 <b>-</b></span>
   <span class="chip" id="chipEngine"><span class="dot"></span>引擎 <b>-</b></span>
+  <span class="chip" id="chipCost" title="账本还没读到"><span class="dot"></span>花费 <b>-</b></span>
   <span class="chip" id="chipUp">运行 <b>-</b></span>
   <span class="chips">
     <select id="volumeSel" title="放音音量：只调小，板子和页面试听同时生效">
@@ -515,6 +516,51 @@ function renderStatus() {
 }
 
 /* ------------------------------------------------------------------ */
+/* 计费（只读账本，只看不控）                                           */
+/* ------------------------------------------------------------------ */
+let _usageBusy = false;
+
+async function pollUsage() {
+  if (S.quit || _usageBusy) return;
+  _usageBusy = true;
+  try {
+    const res = await api("/api/usage");
+    renderUsage(await res.json());
+  } catch (e) { /* 下一轮再试 */ }
+  finally { _usageBusy = false; }
+}
+
+function money(v) {
+  if (typeof v !== "number" || !isFinite(v)) return "-";
+  if (v === 0) return "¥0";
+  return v >= 0.01 ? "¥" + v.toFixed(3) : "¥" + v.toFixed(5);
+}
+
+function renderUsage(u) {
+  const chip = $("#chipCost");
+  if (!chip || !u) return;
+  chip.innerHTML = '<span class="dot"></span>花费 <b>今日 ' + money(u.today_cny) + "</b>";
+  const lines = [
+    "本月 " + money(u.month_cny) + " · 累计 " + money(u.total_cny)
+      + " · 共 " + (u.turns || 0) + " 轮",
+  ];
+  if (u.unpriced_turns) {
+    lines.push(u.unpriced_turns + " 轮没有配价格，未计金额（只算轮数）");
+  }
+  const names = Object.keys(u.by_profile || {});
+  if (names.length) {
+    lines.push("按大脑：");
+    for (const name of names) {
+      const p = u.by_profile[name];
+      lines.push("  " + name + "：今日 " + money(p.today_cny)
+        + " · 本月 " + money(p.month_cny) + " · " + (p.turns || 0) + " 轮");
+    }
+  }
+  lines.push("来源 ~/.voice-ai/usage.jsonl；本地大脑与 edge 免费，只计轮数");
+  chip.title = lines.join("\n");
+}
+
+/* ------------------------------------------------------------------ */
 /* 切 API（brain profile）                                             */
 /* ------------------------------------------------------------------ */
 let _brainSig = "";
@@ -618,6 +664,8 @@ async function pollTurns() {
       trimTurns();
       renderHistory();
       if (S.selected === null) selectTurn(S.turns[S.turns.length - 1].seq, false);
+      // 一轮结束才可能新增账本行，顺手刷新花费
+      pollUsage();
     }
     if (data.logs && data.logs.length) appendLogs(data.logs);
     if (data.cursor) S.cursor = data.cursor;
@@ -1709,6 +1757,7 @@ async function boot() {
     return;
   }
   $("#gate").classList.remove("on");
+  pollUsage();
   await pollTurns();
   if (S.selected === null && S.turns.length) {
     selectTurn(S.turns[S.turns.length - 1].seq, false);

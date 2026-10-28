@@ -30,6 +30,7 @@ import screen_hub
 import screen_http
 import songs
 import usage
+import usage_report
 import winperf
 from pipeline import Bridge, Timers
 from tts import Tts
@@ -709,7 +710,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(503, b'{"error":"screen disabled"}', close=True)
             return screen_http.write_stream(self, self.screen_streamer)
         if route not in ("/api/state", "/api/turns", "/api/memory",
-                         "/api/permissions", "/api/permissions/dirs"):
+                         "/api/usage", "/api/permissions",
+                         "/api/permissions/dirs"):
             return self._reply(404, b'{"error":"not found"}')
         if not self._authorized():
             return self._reply(401, b'{"error":"bad auth"}', close=True)
@@ -717,6 +719,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply_json(200, self._state())
         if route == "/api/turns":
             return self._reply_json(200, self._turns_payload())
+        if route == "/api/usage":
+            return self._reply_json(200, usage_report.report())
         if route.startswith("/api/permissions"):
             # 目录清单暴露本机文件结构，只给本机页面看。
             if not self._is_loopback():

@@ -30,6 +30,7 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
   - `GET /api/state` brain active/pinned/cooling / profiles / profile_meta（模型名与价格，**不含密钥**）/ engine / memory / 关键 config
   - `GET /api/turns?since=N&log_since=M` 增量拉轮次快照与日志行，返回新游标
   - `GET /api/memory[?text=1]` 默认只回计数，`text=1` 才回记忆原文
+  - `GET /api/usage`（2026-10-28 新增）：只读汇总 `~/.voice-ai/usage.jsonl`，回今日/本月/累计金额、轮数、未计价轮数、按大脑拆分；日/月界按本机时区算。**只看账，不设上限、不拦调用**。调试台顶栏「花费」胶囊就是它
   - `POST /api/text` body `{"text":"..."}`，跳 ASR，其余走同一条流水线
   - `POST /shutdown` / `POST /restart`（2026-10-28 新增，loopback-only）：关闭 / 重启本机 bridge。重启会先拉一个分离的等待进程（`bridge/relaunch.py`），等旧进程连 worker 一起退出、端口让出来后，再按桌面的 `start-bridge.cmd` 开一个新控制台窗口；旧进程退出前先回 200，页面自动重连
   - `POST /api/volume`（2026-10-28 新增，loopback-only）：body `{"level":30|50|70|100}`，bridge 在发 PCM 前按档位衰减（原唱和 TTS 都走这条路），档位存 `~/.voice-ai/playback.json`；固件增益不动，所以只影响响度、不改音色

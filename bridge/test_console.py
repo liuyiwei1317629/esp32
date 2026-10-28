@@ -311,6 +311,44 @@ class ConsoleRouteTest(_HubCase):
         resp = self.get("/nope")
         self.assertEqual(resp.status_code, 404)
 
+    # ---- /api/usage -----------------------------------------------------
+    def test_usage_requires_auth(self):
+        with patch.object(config, "auth_token", return_value="secret"):
+            resp = self.get("/api/usage")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_usage_sums_ledger_by_profile(self):
+        rows = [
+            {"ts": "2026-10-28T03:00:00+00:00", "profile": "deepseek",
+             "prompt_tokens": 100, "completion_tokens": 50,
+             "cost_cny": 0.0006, "fallback_used": False},
+            {"ts": "2026-10-28T03:10:00+00:00", "profile": "local",
+             "prompt_tokens": 80, "completion_tokens": 40,
+             "cost_cny": 0.0, "fallback_used": False},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "usage.jsonl")
+            with open(path, "w", encoding="utf-8") as fh:
+                for row in rows:
+                    fh.write(json.dumps(row) + "\n")
+            with patch.object(config, "auth_token", return_value=None), \
+                    patch.object(config, "USAGE_LEDGER_FILE", path):
+                resp = self.get("/api/usage")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["currency"], "CNY")
+        self.assertEqual(data["turns"], 2)
+        self.assertAlmostEqual(data["total_cny"], 0.0006, places=6)
+        self.assertEqual(set(data["by_profile"]), {"deepseek", "local"})
+        self.assertEqual(data["by_profile"]["deepseek"]["turns"], 1)
+        self.assertIn("month", data)
+        self.assertIn("unpriced_turns", data)
+
+    def test_console_page_shows_cost_chip(self):
+        resp = self.get("/console")
+        self.assertIn('id="chipCost"', resp.text)
+        self.assertIn('api("/api/usage"', resp.text)
+
     # ---- /api/state -----------------------------------------------------
     def test_state_requires_auth(self):
         with patch.object(config, "auth_token", return_value="secret"):
