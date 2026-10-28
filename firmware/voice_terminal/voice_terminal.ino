@@ -5,12 +5,13 @@
 // 任何错误回 IDLE 并打印原因；不死循环、不重启。
 // =============================================================
 #include <Arduino.h>
-#include <WiFi.h>
 #include "esp_heap_caps.h"
 #include "esp_psram.h"
 #include "config.h"
 #include "audio_io.h"
 #include "http_turn.h"
+#include "screen_client.h"
+#include "wifi_setup.h"
 
 #if APP_MODE != APP_MODE_RECORD_ONLY
   #if __has_include("secrets.h")
@@ -81,24 +82,10 @@ static void buildWavHeader(uint8_t h[44], uint32_t pcm_bytes) {
 #endif
 
 // ---------------- Wi-Fi（仅 TURN / TURN_STOP 使用；2.4 GHz） ----------------
+// 细节都在 wifi_setup.cpp：NVS 账号 -> secrets.h 账号 -> 热点配网。
+// 这里每次都重试，因为路由器重启后要能自己连回去。
 #if APP_MODE != APP_MODE_RECORD_ONLY
-static bool wifiEnsure() {
-  if (WiFi.status() == WL_CONNECTED) return true;
-  uint32_t t0 = millis();
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);   // 降低延迟
-  WiFi.begin(WIFI_SSID, WIFI_PASS);   // 不打印密码
-  while (WiFi.status() != WL_CONNECTED) {
-    if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
-      Serial.println("wifi_ms=timeout ip=none");
-      return false;
-    }
-    delay(200);
-  }
-  Serial.printf("wifi_ms=%lu ip=%s\n", (unsigned long)(millis() - t0),
-                WiFi.localIP().toString().c_str());
-  return true;
-}
+static bool wifiEnsure() { return wifiSetupEnsure(); }
 #endif
 
 // ---------------- 录音：松手 / 静音 1.2 s / 最长 15 s ----------------
@@ -356,6 +343,7 @@ void setup() {
 #if APP_MODE != APP_MODE_RECORD_ONLY
   wifiEnsure();
 #endif
+  screenStart();       // 屏任务独立跑在 core 0 / prio 2，不碰音频任务
   logState("IDLE");
 }
 
@@ -363,10 +351,14 @@ void setup() {
 void loop() {
   switch (s_state) {
     case ST_IDLE: {
+#if APP_MODE != APP_MODE_RECORD_ONLY
+      wifiSetupPollSerial();   // 串口 portal / forget
+#endif
       bool down = debouncedDown();
       if (!down) s_waitRelease = false;
       if (down && !s_waitRelease) {   // 按住 BOOT 开始录音
         s_waitRelease = true;         // 防止 RECORD_ONLY/错误早退后按住键重复触发
+        screenNotifyKey();            // 只置标志：联网在屏幕任务里做，录音不等它
         playTone(1000, 60, 4000);     // "嘀" = 开始录音（电平压低，减少被话筒拾取）
         s_state = ST_RECORDING;
         logState("RECORDING");

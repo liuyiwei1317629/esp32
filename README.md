@@ -1,5 +1,7 @@
 # 本地语音链路（听 + 说）
 
+> 换机器/重装/过几个月回来：先看 `RUNBOOK.md`（运行环境 · 启动 · 配置 · 打包清单）。
+
 选型：SenseVoice-Small 负责「听」，CosyVoice-300M-SFT 负责「说」，「想」走云端 agent，不留本地大脑。
 两个模型许可均为 Apache 2.0（SenseVoice 见魔搭模型页；CosyVoice 见 `CosyVoice/LICENSE` 正本）。
 本地不保留人格大脑；云端 profile 切换已实现（`bridge/brains.py`、`/brain`），用量账本写 `~/.voice-ai/usage.jsonl`；五层记忆阶段 1–5 已完成，**真实目录已于 2026-10-23 启用**（`start-bridge.cmd` 设 `MEMORY_ENABLED=1`、`MEMORY_DRY_RUN=0`；代码默认仍关闭，两轮真实写入已验证）；规则命令（stop/time/timer）已在 `pipeline.Turn` 本地短路，不调云端；本地应急兜底已接入（Ollama 0.40.8 + `qwen3.5:2b-q4_K_M`，`bridge/local_plugin.py`，默认关闭），见 `bridge/README.md`。

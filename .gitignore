@@ -24,6 +24,10 @@ __pycache__/
 /asr_readable.txt
 /asr_result.json
 /tts_report.json
+/songs/
+
+# 屏幕帧库：由 bridge/tools/build_screen_frames.py 生成（25 段 2,449 帧，约 20 MB）
+/bridge/screen_frames/
 
 # 固件构建产物
 /firmware/voice_terminal/build/

@@ -77,7 +77,7 @@ PC 端「听 → 想 → 说」已经跑通；云端是唯一的人格/长期记
   - 2026-10-27 收尾清理后重编：RECORD_ONLY 397,319 B（30%）/ 52,316 B（15%）、TURN 943,302 B（71%）/ 71,316 B（21%）、TURN_STOP 943,486 B（71%）/ 71,316 B（21%），**0 error / 0 warning**（删掉了 `playDC`/`playSweep` 与全部临时诊断打印）。
   - `--warnings all` 下自有文件 0 warning；`compile_commands.json` 确认 `-DAPP_MODE=1/2` 生效。2026-10-26 上机完成本地录放，**2026-10-27 联网两模式上机验证通过**（见 §1.2 开头）。
   - 2026-10-22 复审后修了 6 处：`s_waitRelease` 重复触发、播放排空 abort 卡死、`/stop` 先本地 flush、排空阶段可打断、上传提前响应/超时、`MIC_AMP_SHARED_CLOCKS=1` 编译守卫。单总线路径仍未实现，只是被禁止。
-- **测试环境口径**：脚本自检 29/29（sentence_split 10、llm 9、pipeline 10）。**单元回归必须用显式模块清单**：19 个 unittest 模块共 **381 例全过**（2026-10-27 实测），其中记忆 204 例；加上 3 个脚本自检，hermetic 合计 **22 个测试文件、410 例**。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
+- **测试环境口径**：脚本自检 29/29（sentence_split 10、llm 9、pipeline 10）。**单元回归必须用显式模块清单**：35 个 unittest 模块共 **528 例全过**（2026-10-28 实测），其中记忆 204 例、屏幕 35 例（`test_screen_frames_build/config/compose/hub/http/server_hooks`，**只能在 Windows 本机跑**：要 PIL、微软雅黑和 20 MB 帧库，不进 `hermetic.yml`）；2026-10-28 新增 `test_console_restart.py` 9 例、`test_songs.py` 11 例、`test_playback.py` 9 例、`test_console_volume.py` 5 例，一起跑。加上 3 个脚本自检，hermetic 文件再加 2 个。`test_e2e.py`、`test_live.py`、`test_edge_content.py` 是脚本式实跑，**import 即执行真实 HTTP / ASR / TTS / 云端调用**（`test_live` 还会启动 CosyVoice 占 GPU、花钱并写用量账本），不是 hermetic 单测。**不要跑裸 `unittest discover`。** 系统 Python 缺可选依赖 `funasr`，导入这些实跑脚本会报缺依赖；那是环境问题，不是记忆回归。`test_e2e.py` 不带 `X-Auth`，本机有 `bridge_token` 时直接跑会 401；要跑就按 G 手册 §4 用空 token + 不存在的 token 文件的环境变量，且它仍会启动真 ASR/edge，不能当单元回归门。
 - 性能基线（以 `bridge/README.md` 实测节为准）：首字节常见 4.4–5.2 s（2026-10-27 切句定案：首句 ≥18 字、第二句 ≥20 字可逗号切且 26 字硬上限、其余 ≥18 字；真机 69.1 s 回复 0 次断流，22.8–81.4 s 共七轮 0 次，修前 46 次）；CosyVoice 快态 125–215 ms/字，慢态可到 300–558 ms/字，重启后恢复；DeepSeek TTFT 0.1–1.0 s；ASR 在 CPU 上约 0.2–0.5 s。
 - `~/.deepseek/key` 与 `~/.deepseek/bridge_token` 已配置；只能确认存在，不要读取或打印内容。
 - 根 `README.md` 与 `bridge/README.md` 的「云端为主 + 本地功能插件」节已同步；记忆与固件的最终口径以本文和 `bridge/README.md` 记忆节为准。
@@ -504,13 +504,20 @@ C:\Users\DELL\voice-ai\
     memory_writer.py                 ← 阶段 3 异步写作 + 阶段 4 维护/退出补刷（代码默认 dry-run）
     context_builder.py               ← B 归档，未接入
     commands.py  local_commands.py   ← C 已接入：解析 + 本地回复文本
-    test_*.py                        ← 24 个 = 21 个 hermetic（18 unittest + 3 脚本自检）+ 3 个实跑脚本
+    screen_config.py  screen_hub.py  screen_compose.py  screen_http.py  ← 屏幕推流，默认 SCREEN_ENABLED=0
+    screen_frames\  screen_assets\   ← 20 MB 帧库（生成物，未进 git）+ 关机图 JPEG
+    tools\build_screen_frames.py     ← webm → 320×180 JPEG（构建期，需 WSL ffmpeg）
+    test_*.py                        ← 41 个 = 35 个 unittest + 6 个脚本自检/实跑（3 自检 + 3 实跑）
     bench_memory_score.py            ← L3 基准
   firmware\
     README.md
     voice_terminal\
       voice_terminal.ino  config.h  audio_io.h  audio_io.cpp
       http_turn.h  http_turn.cpp  secrets.example.h
+      display_st7789.h  display_st7789.cpp    ← ST7789 驱动（横屏 320×240，SPI 40 MHz）
+      screen_client.h  screen_client.cpp      ← 拉 /screen、解 JPEG、刷屏、按键上报
+      offline_jpg.h                           ← 「电脑关机了」图，24,327 B 数组
+    tools\gen_offline_jpg.py  test_offline_jpg.py
   design\
     2026-10-23-layered-memory-design.md
   handoff\
@@ -577,7 +584,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 ### 14.3 测试门
 
 - 任何记忆改动：记忆 **204 例**（151 纯模块 + 27 writer + 26 集成）全过；再跑脚本 27 例。读路径硬门是 **p95 ≤20 ms**（500 episodes + 500 字 + 预热 token cache）；阶段 5 实测 p50 1.93 ms / p95 2.06 ms。
-- 任何 bridge 改动：显式清单 19 个 unittest 模块 **381 例**（2026-10-27 系统 Python 3.13 实测）+ 3 个脚本自检 **29 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`/`test_edge_content.py`）。`test_pipeline.py` / `test_llm.py` / `test_sentence_split.py` 是脚本式自检，**不要塞进 unittest 清单**——导入时就会跑模块级用例并改写 `llm.stream_reply` / `local_plugin.stream_reply`，污染同进程里的其他模块。
+- 任何 bridge 改动：显式清单 35 个 unittest 模块 **528 例**（2026-10-28 系统 Python 3.13 实测；含 `test_console_restart.py` 9、`test_songs.py` 11、`test_playback.py` 9、`test_console_volume.py` 5、屏幕 35 例） + 3 个脚本自检 **29 例**全过；**不要用裸 `unittest discover`**（会 import 即执行 `test_e2e.py`/`test_live.py`/`test_edge_content.py`）。`test_pipeline.py` / `test_llm.py` / `test_sentence_split.py` 是脚本式自检，**不要塞进 unittest 清单**——导入时就会跑模块级用例并改写 `llm.stream_reply` / `local_plugin.stream_reply`，污染同进程里的其他模块。注意：`turn._messages()` 现在总会追加本机歌单说明，记忆关闭/失败时的 system 消息 = `DEFAULT_PERSONA` + 歌单块，不再是纯人格文本。
 - 任何固件改动：三模式重编译，0 error；上机按 G 检查点复测。
 - 不把 `funasr` 环境错误当回归；不顺手跑 `test_e2e.py`、`test_live.py` / `throttle_probe.py`。
 - 提交前看 `git status`；只暂存源码/文档/测试，生成物与个人数据由 `.gitignore` 排除，不要 `git add -A`。

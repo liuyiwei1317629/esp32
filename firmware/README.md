@@ -50,6 +50,25 @@
 - 禁用/避免：GPIO0/3/45/46（strapping，GPIO0 只给 BOOT 按键）、GPIO19/20（USB）、GPIO43/44（UART）、GPIO48（RGB）、GPIO35–37（octal PSRAM）。
 - BOOT 按键用 GPIO0，低有效，内部上拉；**复位时不要按住**（会进下载模式）。
 
+### 1.4 屏幕（2026-10-28 加，未上机）
+
+2.4 寸 ST7789（物理 240×320，横过来当 320×240），SPI 只写不读：
+
+| 屏 | 接 ESP32-S3 |
+|---|---|
+| SCLK / SCL | GPIO12 |
+| SDA / MOSI | GPIO11 |
+| CS | GPIO10 |
+| DC / RS | GPIO13 |
+| RST / RES | GPIO14 |
+| BL / LED | **直接接 3V3**（GPIO 带不动 20–40 mA） |
+| VCC / GND | 3V3 / GND |
+
+- 走 `SPI2_HOST`（FSPI），40 MHz；MADCTL = `MX|MV` 横屏；`LCD_INVERT` 默认 `true`，颜色反了先改这个。
+- 一块 153,600 B 的帧缓冲 + 64 KB JPEG 缓冲都在 **PSRAM**，不占内 RAM。
+- 屏幕断开或 bridge 没开时，固件照常录音/播放；只是屏停在离线图。
+- 接线顺序与上机验收步骤见工作区 `esp32肥鱼/屏幕接线单页-2026-10-28.md` 第 9 节。
+
 ## 2. 编译环境
 
 Arduino IDE 板子设置：
@@ -63,17 +82,26 @@ Arduino IDE 板子设置：
 | USB CDC On Boot | **Disabled**（串口走 CH343） |
 
 - 目标 **Arduino-ESP32 core 3.x / ESP-IDF 5.x**，代码用 `driver/i2s_std.h` 的 `i2s_channel_*` API。core 2.x 编译不过，不要混用旧 `driver/i2s.h`。
-- 除 Arduino-ESP32 自带组件外无第三方库依赖。
+- 除 Arduino-ESP32 自带组件外只有一个第三方库：**TJpg_Decoder 1.1.0**（屏幕解 JPEG）。本机把 `src/User_Config.h` 改成了只解内存里的 JPEG：
 
-### 2.1 已做过的编译验证（最近一次 2026-10-27）
+  ```c
+  #define TJPGD_NO_FFS
+  // #define TJPGD_LOAD_SD_LIBRARY
+  ```
+
+  同时 `src/TJpg_Decoder.h` 第 20 行的 `#if (defined (ARDUINO_ARCH_ESP8266) || defined (ESP32))` 加了 `&& !defined (TJPGD_NO_FFS)`。不改就白带 SPIFFS/LittleFS/SD 支持，多约 14 KB flash。**换机器要重做这个改动**，步骤见 `bridge/README.md`。
+
+### 2.1 已做过的编译验证（最近一次 2026-10-28，含屏幕）
 
 arduino-cli 1.5.1 + `esp32:esp32@3.3.12`，FQBN `esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=default,CDCOnBoot=default`：
 
-| 模式 | `-DAPP_MODE` | Flash | RAM |
-|---|---|---|---|
-| RECORD_ONLY | 0（默认） | 397,319 B (30%) | 52,316 B (15%) |
-| TURN | 1 | 943,302 B (71%) | 71,316 B (21%) |
-| TURN_STOP | 2 | 943,486 B (71%) | 71,316 B (21%) |
+| 模式 | `-DAPP_MODE` | 含屏 Flash | 含屏 RAM | 10-27 无屏 Flash |
+|---|---|---|---|---|
+| RECORD_ONLY | 0（默认） | 425,792 B | 53,232 B | 397,319 B (30%) |
+| TURN | 1 | 1,090,739 B | 78,956 B | 943,302 B (71%) |
+| TURN_STOP | 2 | 1,090,911 B (84%) | 78,956 B | 943,486 B (71%) |
+
+当前尺寸**含屏幕**（ST7789 + TJpg_Decoder），三模式 **0 error / 0 warning**。同一棵树去掉屏幕代码的对照编译是 1,032,198 B / 74,500 B，所以屏幕本身只多 **+58,713 B flash、+4,456 B 内 RAM**（其中关机图 24,327 B）。对照值和 10-27 的历史值不同，是因为 10-27 之后主干又长了几十 KB，**不要拿历史值算屏幕开销**。
 
 - 2026-10-27 删掉开机音阶和 `playDC` / `playSweep` 两个未使用的诊断函数后重新编译，三模式均 **0 error / 0 warning**。
 - 2026-10-27 早先在 10-26 音频重写之后也做过一次三模式编译（0 error，尺寸略大）。

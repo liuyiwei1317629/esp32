@@ -1,7 +1,7 @@
 import re
 
 STRONG = "。！？!?；;\n"
-WEAK = "，,、：:"
+WEAK = "，,、：:…"
 BREAKS = STRONG + WEAK
 
 _MEANINGFUL = re.compile(r"[^\W_]")
@@ -71,9 +71,29 @@ class SentenceSplitter:
             self._emitted += 1
             return head
         if weight(self._buf) >= hard:
+            # Cutting at an arbitrary character lands mid-phrase ("……发生点")
+            # and leaves a 2-char tail the model reads badly. Prefer the last
+            # usable break instead, even one the min-char gate rejected.
+            i = self._last_break(weak_ok)
+            if i is not None:
+                head = self._buf[: i + 1]
+                self._buf = self._buf[i + 1 :]
+                self._emitted += 1
+                return head
             head, self._buf = self._buf, ""
             self._emitted += 1
             return head
+        return None
+
+    def _last_break(self, weak_ok, min_weight=8):
+        for i in range(len(self._buf) - 1, -1, -1):
+            ch = self._buf[i]
+            if ch not in BREAKS:
+                continue
+            if ch not in STRONG and not weak_ok:
+                continue
+            if weight(self._buf[: i + 1]) >= min_weight:
+                return i
         return None
 
 

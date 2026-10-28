@@ -169,5 +169,33 @@ static constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 5000;   // TCP 连接超时
 static constexpr uint32_t HTTP_UPLOAD_TIMEOUT_MS  = 20000;  // 整个 WAV 请求体的发送上限
 static constexpr uint32_t HTTP_READ_TIMEOUT_MS    = 20000;  // 读超时（首字节可能 5-9 s）
 
+// ===== 配网（wifi_setup.cpp）=====
+// 连不上 Wi-Fi 时开的热点。手机连它，浏览器会自动弹出配置页。
+static constexpr const char* MDNS_NAME      = "voice-ai";        // voice-ai.local
+static constexpr const char* PORTAL_AP_SSID = "voice-ai-setup";  // 开放热点，无密码
+// 没人连：3 分钟后关掉热点回正常流程（别让录音键一直被卡住）；
+// 有人连：一直等到 10 分钟上限，防止填到一半被踢。
+static constexpr uint32_t PORTAL_IDLE_MS    = 3UL * 60UL * 1000UL;
+static constexpr uint32_t PORTAL_MAX_MS     = 10UL * 60UL * 1000UL;
+// bridge 地址写成 名字.local 时，解析结果的复用时间和失败重试间隔
+static constexpr uint32_t MDNS_REFRESH_MS   = 5UL * 60UL * 1000UL;
+static constexpr uint32_t MDNS_RETRY_MS     = 60UL * 1000UL;
+
 // ===== 按键 =====
 static constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;  // 去抖；不用长按/双击等复杂手势
+
+// ===== 屏幕（ST7789 240x320，横屏当 320x240 用）=====
+// 接线见 屏幕接线单页-2026-10-28.md §2；背光 BL 直接接 3V3（GPIO 拉不动 20-40 mA）。
+static constexpr int PIN_LCD_SCLK = 12;
+static constexpr int PIN_LCD_MOSI = 11;
+static constexpr int PIN_LCD_CS   = 10;
+static constexpr int PIN_LCD_DC   = 13;
+static constexpr int PIN_LCD_RST  = 14;
+static constexpr uint32_t LCD_SPI_HZ = 40000000;   // 40 MHz：153.6 KB/帧 ≈ 31 ms
+static constexpr uint16_t LCD_W = 320;             // 横屏后的宽
+static constexpr uint16_t LCD_H = 240;             // 横屏后的高
+// 这批模块大多是反显；颜色反了就把 INVON 去掉（或把这个改成 false）。
+static constexpr bool LCD_INVERT = true;
+static constexpr size_t   SCREEN_JPEG_MAX = 64 * 1024;    // PSRAM 收帧缓冲（实测单帧 ~7 KB）
+static constexpr uint32_t SCREEN_RECONNECT_MS = 2000;     // 断流后重连间隔
+static constexpr uint32_t SCREEN_IDLE_TIMEOUT_MS = 4000;  // 这么久没帧就当电脑不在

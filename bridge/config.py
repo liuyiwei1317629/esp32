@@ -81,6 +81,18 @@ MEMORY_CURRENT_INPUT_MAX_CHARS = _env_int("MEMORY_CURRENT_INPUT_MAX_CHARS", 500)
 MEMORY_DRY_RUN = os.environ.get("MEMORY_DRY_RUN", "1") == "1"
 MEMORY_DEBUG = os.environ.get("MEMORY_DEBUG", "0") == "1"
 
+# 授权目录的只读检索。功能开关只决定「能不能用」，真正的权限在
+# ~/.voice-ai/permissions.json 里，默认一条都没有。
+FILE_ACCESS_ENABLED = os.environ.get("FILE_ACCESS_ENABLED", "1") == "1"
+FILE_PERMS_FILE = os.environ.get(
+    "FILE_PERMS_FILE", os.path.join(os.path.expanduser("~"), ".voice-ai", "permissions.json")
+)
+
+# 设备最近一次露面（IP + 时间），只用于调试台顶栏展示。
+DEVICE_SEEN_FILE = os.environ.get(
+    "DEVICE_SEEN_FILE", os.path.join(os.path.expanduser("~"), ".voice-ai", "device_seen.json")
+)
+
 # DeepSeek deepseek-flash peak rates, CNY per million tokens (2026-10-22).
 # Off-peak is half; cache hits are cheaper. The ledger is a conservative estimate.
 DEEPSEEK_PRICE_IN_CNY_PER_MTOK = _env_float(
@@ -112,7 +124,27 @@ SENTENCE_SECOND_MAX_CHARS = _env_int("SENTENCE_SECOND_MAX_CHARS", 26)
 # (RTF 0.91-0.93 vs 0.78-0.97 in fp32, i.e. inside the noise), so it stays off
 # until something proves otherwise.
 COSYVOICE_FP16 = bool(_env_int("COSYVOICE_FP16", 0))
-EDGE_VOICE = os.environ.get("EDGE_VOICE", "zh-CN-XiaoxiaoNeural")
+
+# Feiyu (小鱼) voice: a CosyVoice3 0.5B fine-tune that only runs inside WSL
+# (Linux torch cu128). The bridge spawns it through wsl.exe, speaking the same
+# JSON-lines protocol as the Windows workers.
+FEIYU_ENABLED = os.environ.get("FEIYU_ENABLED", "1") == "1"
+FEIYU_WSL = os.environ.get("FEIYU_WSL", "wsl.exe")
+FEIYU_DISTRO = os.environ.get("FEIYU_DISTRO", "Ubuntu-24.04")
+FEIYU_PY = os.environ.get("FEIYU_PY", "/root/.local/share/feiyu-voice/venv311/bin/python")
+FEIYU_SCRIPT = os.environ.get(
+    "FEIYU_SCRIPT", "/mnt/c/Users/DELL/voice-ai/bridge/worker_feiyu.py")
+# The model lives on the WSL ext4 volume: ~90 s to load there versus ~250 s
+# over the /mnt/d share, and 3.4 GB of VRAM once loaded.
+FEIYU_MODEL_DIR = os.environ.get("FEIYU_MODEL_DIR", "/root/feiyu-voice/model")
+FEIYU_STYLE = os.environ.get("FEIYU_STYLE", "cute")
+FEIYU_READY_TIMEOUT = _env_float("FEIYU_READY_TIMEOUT", 300.0)
+# Measured RTF 0.74-0.80 once warm, so a 26-char sentence (~7 s of audio) costs
+# ~5.5 s. As with COSYVOICE_TIMEOUT, firing mid-reply is worse than waiting:
+# the fallback is a different voice.
+FEIYU_TIMEOUT = _env_float("FEIYU_TIMEOUT", 20.0)
+
+EDGE_VOICE = os.environ.get("EDGE_VOICE", "zh-CN-XiaoxuanNeural")
 
 DEFAULT_PERSONA = "你是一只温柔的陪伴小机器，说话自然口语化，句子短，不用列表和markdown。"
 

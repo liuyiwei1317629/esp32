@@ -73,4 +73,17 @@ got = collect(list("甲" * 18 + "。" + "乙" * 40),
 assert [weight(s) for s in got] == [18, 26, 14], [weight(s) for s in got]
 assert "".join(got) == "甲" * 18 + "。" + "乙" * 40, got
 
-print("sentence_split: 10/10 passed")
+# 11. no usable break before the second-sentence cap -> back off to the last
+#     break of any kind instead of cutting mid-phrase (this used to emit
+#     "……你想让它后来发生点" + a 2-char "啥？" tail)
+got = collect(list("行，我来给你编个故事。从前有只小机器人，每天在咖啡馆里帮忙端盘子。"
+                   "有一天它遇到一个总是一个人来的客人……你想让它后来发生点啥？"),
+              min_chars=18, first_min_chars=18,
+              second_min_chars=20, second_max_chars=26)
+assert got == [
+    "行，我来给你编个故事。从前有只小机器人，每天在咖啡馆里帮忙端盘子。",
+    "有一天它遇到一个总是一个人来的客人……",
+    "你想让它后来发生点啥？",
+], got
+
+print("sentence_split: 11/11 passed")

@@ -3,6 +3,7 @@
 > 先读 `HANDOFF.md`（PC 端全量）与 `HANDOVER-G.md`（硬件最新，2026-10-26 定稿）。本文件只回答三件事：**现在在哪、什么能跑、下一步做什么**。
 >
 > **2026-10-27 08:17 更新**：TTS 延迟线（EcoQoS 节流修复、切句实验）另有交接单 `NEXT-AI-2026-10-27-tts-latency.md`；本文件的相关状态已按该交接单更新。
+> **2026-10-27 11:52 更新**：调试台已生效（bridge 已重启为带调试台的新代码）。新增顶部 `brain` 胶囊下拉可**直接切 API**（复用 `POST /brain`，下一轮生效，不重启）。`/turn` 契约未动。
 > PC 端是主体；ESP32-S3 硬件已于 2026-10-26 接线上电，本地录放链路可用；联网两模式 2026-10-27 **已上机验证**（TURN 多轮 `result=ok`，TURN_STOP 打断 `stop_ms=18–20`、`result=aborted`）。
 
 ## 0. 一句话
@@ -12,7 +13,9 @@ PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用�
 ## 1. 当前状态（2026-10-27 实测）
 
 ### 服务
-- bridge **未运行**：8080 无 LISTENING，无 python.exe 进程。
+- bridge **正在运行**（2026-10-27 11:52 重启，PID 31676，`bridge/server.py --serve`，带 CosyVoice）。
+  - 重启注意：**刚 kill 完旧进程别立刻起**，CosyVoice worker 会报 `CUDA error: device busy` 并退出（`bridge/logs/cosyvoice.log` 有 traceback）。等 GPU 回到 0 MiB 再启动。
+  - `Start-Process` 在本机报 `字典中的关键字 HTTPS_PROXY 所添加的关键字 https_proxy`：启动前先 `Remove-Item Env:http_proxy, Env:https_proxy` 再重设大写的那份。
 - Ollama **未运行**：11434 无监听。要用本地兜底，先 `D:\ollama\start-ollama.cmd`。
 - 启动方式：
   - 带真实记忆：项目根 `start-bridge.cmd`（设 `MEMORY_ENABLED=1`、`MEMORY_DRY_RUN=0`）
@@ -20,6 +23,25 @@ PC 端“听 → 想 → 说”链路已经可用；五层记忆已真实启用�
   - 不占 GPU：加 `--no-cosyvoice`
 - 局域网：文档写 `192.168.0.100:8080`，但本机当前 WLAN 是 **192.168.0.101**；启动前用 `ipconfig` 确认，别照抄旧 IP。
 - 8080 入站防火墙改动属系统级；连不上只报告，不改规则。
+
+### 调试台（2026-10-27 新增，**已重启生效**）
+- 入口：`http://127.0.0.1:8080/console`。本机打开时 token 自动注入页面；从局域网 IP 打开需手填 `~/.deepseek/bridge_token`。
+- 能做的事：按住说话（浏览器采 16k WAV 走 `/turn`）或直接打字（跳 ASR）；看首字节瀑布图（ASR→LLM首字→凑满首句→合成首句→送达）；看 ASR 原文、回复全文、每轮记忆装配明细、实时日志；切 session 桶（`web` 不污染设备记忆 / `dev1` 与设备共用）；`#turn=N` 直达某一轮；**点顶部 `brain` 胶囊切 API**。
+- 新增端点（**纯增量，`/turn` 契约一个字节没改**）：
+  | 端点 | 作用 |
+  |---|---|
+  | `GET /console` | 调试台单页，免鉴权（页面本身不含数据，数据接口都要 `X-Auth`） |
+  | `GET /api/state` | brain active/pinned/cooling、profiles、engine、memory、关键 config |
+  | `GET /api/turns?since=N&log_since=M` | 增量拉轮次快照与日志行，返回新游标 |
+  | `GET /api/memory[?text=1]` | 默认只回计数；`text=1` 才回记忆原文（个人数据，需主动打开） |
+  | `POST /api/text` | 文字直通，body `{"text":"..."}`，其余与 `/turn` 同一条流水线 |
+  | `POST /brain` | 原有端点，body `{"profile":"<name>"}`、LAN-only；调试台顶部下拉就是它的 UI |
+- `GET /api/state` 里的 `profile_meta` 只给 model 名与价格，**不含任何密钥**（`llm.profile_meta()` 白名单字段）。
+- **切 API 的实际可选数量 = `~/.voice-ai/brains.toml` 里启用的 profile 数**。当前该文件只启用 `deepseek` 一条（`kimi`、`local` 是注释模板），所以下拉里目前只有一项；要真切得先在那个文件里取消注释并配 `key_file`。
+- 落盘：`~/.voice-ai/console/turns.jsonl`，一行一轮。`CONSOLE_RECORD=0` 关闭；`CONSOLE_RECORD_DIR` 改路径。
+- 代码：`bridge/console_hub.py`（中枢）、`bridge/webui/console.html`（单页，原生 JS 无构建）、`bridge/test_console.py`（24 例）。
+- 设计约束：所有调试挂钩都包了 try，**调试台出问题不会连累一轮真实对话**；`build_report()` 与原 `report()` 输出格式逐字一致。
+
 
 ### 代码
 - 仓库：`C:\Users\DELL\voice-ai`，分支 `main`，HEAD `106e57d`（未推送；`1a14b2a` 固件、`1205609` 长回复修复、`106e57d` 本地兜底）。
@@ -118,7 +140,8 @@ PYTHONIOENCODING=utf-8 python -m unittest \
   test_memory_context test_memory_maintenance test_memory_admin \
   test_memory_writer test_memory_integration \
   test_brains test_brain_stream test_server_brain test_usage test_server_usage \
-  test_context_builder test_commands test_local_commands test_local_plugin
+  test_context_builder test_commands test_local_commands test_local_plugin \
+  test_console
 PYTHONIOENCODING=utf-8 python test_sentence_split.py
 PYTHONIOENCODING=utf-8 python test_llm.py
 PYTHONIOENCODING=utf-8 python test_pipeline.py
@@ -141,7 +164,9 @@ PYTHONIOENCODING=utf-8 python test_pipeline.py
 
 | 位置 | 作用 |
 |---|---|
-| `bridge/server.py` | HTTP 服务、`/turn`、`/stop`、`/brain`、启动/退出、记忆状态行 |
+| `bridge/server.py` | HTTP 服务、`/turn`、`/stop`、`/brain`、`/api/*`（调试台）、启动/退出、记忆状态行 |
+| `bridge/console_hub.py` | 调试台数据中枢：轮次环形缓冲、增量游标、`~/.voice-ai/console/turns.jsonl` 落盘 |
+| `bridge/webui/console.html` | 调试台单页（原生 JS，无构建、无 npm）；改完刷新即可，不用重启 |
 | `bridge/pipeline.py` | 一轮语音：ASR → LLM/本地命令/本地兜底 → 切句 → TTS → PCM |
 | `bridge/brains.py` / `llm.py` | 云端 profile 路由、流式客户端、冷却与探测 |
 | `bridge/local_plugin.py` | 本地 Ollama 应急兜底（默认关） |
@@ -170,7 +195,8 @@ PYTHONIOENCODING=utf-8 python test_pipeline.py
 ## 7. 接手第一步（建议顺序）
 
 1. `cd C:/Users/DELL/voice-ai && git status --short && git log --oneline -3`
-2. 跑上面测试门，确认 379 + 27 全过。
-3. `netstat -ano | grep -E ":8080|:11434"` 确认服务是否在跑（当前都不在）。
+2. 跑上面测试门，确认 403 例 + 3 个脚本 29 例全过（调试台 24 例含在内）。
+3. `netstat -ano | grep -E ":8080|:11434"` 确认服务是否在跑（当前 8080 在跑，11434 不在）。
 4. 读 `HANDOFF.md` §1.1–§1.3、§2、§9、§11，以及 `HANDOVER-G.md` 的 §0、§3.2、§3.8、§7。
-5. 向用户确认：是否现在提交 PC 端改动、是否进入硬件联网模式。两件事都不要自行决定。
+5. 调试任何一轮对话前，先开 `http://127.0.0.1:8080/console`——比翻 stdout 快得多。
+6. 向用户确认：是否现在提交 PC 端改动、是否进入硬件联网模式。两件事都不要自行决定。

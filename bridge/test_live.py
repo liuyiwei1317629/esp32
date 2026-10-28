@@ -69,7 +69,7 @@ def make_input_wav():
     return dst
 
 
-tts = Tts(start_cosyvoice=True)
+tts = Tts(start_cosyvoice=True, start_feiyu=False)
 print("edge ready=%s warm_ms=%s" % (tts.edge.ready, tts.edge.info.get("warm_ms")), flush=True)
 
 t0 = time.perf_counter()

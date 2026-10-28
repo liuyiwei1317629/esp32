@@ -248,6 +248,23 @@ def brain_status():
     return router().status()
 
 
+def profile_names():
+    """已配置的全部 profile 名（调试台切脑下拉用）。"""
+    return sorted(router().cfg.profiles)
+
+
+def profile_meta():
+    """profile -> 展示用元信息；不含密钥。"""
+    out = {}
+    for name, prof in router().cfg.profiles.items():
+        out[name] = {
+            "model": getattr(prof, "model", None),
+            "price_in": getattr(prof, "price_in_cny_per_mtok", None),
+            "price_out": getattr(prof, "price_out_cny_per_mtok", None),
+        }
+    return out
+
+
 def profile_prices(name):
     prof = router().cfg.profiles.get(name)
     if prof is None:

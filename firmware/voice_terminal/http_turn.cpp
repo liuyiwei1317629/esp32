@@ -6,6 +6,7 @@
 #include "http_turn.h"
 #include "config.h"
 #include "audio_io.h"
+#include "wifi_setup.h"
 #include <WiFi.h>
 
 #if APP_MODE != APP_MODE_RECORD_ONLY
@@ -73,7 +74,8 @@ bool httpPostTurn(const uint8_t* wav, size_t wav_len, TurnResult* res) {
   WiFiClient c;
   c.setNoDelay(true);
   uint32_t t0 = millis();
-  if (!c.connect(BRIDGE_HOST, BRIDGE_PORT, HTTP_CONNECT_TIMEOUT_MS)) {
+  const char* host = wifiBridgeHost();   // NVS 里改过就用新的，否则 secrets.h
+  if (!c.connect(host, BRIDGE_PORT, HTTP_CONNECT_TIMEOUT_MS)) {
     setErr(res, "tcp connect timeout/fail");
     return false;
   }
@@ -85,7 +87,7 @@ bool httpPostTurn(const uint8_t* wav, size_t wav_len, TurnResult* res) {
            "Content-Type: audio/wav\r\n"
            "Content-Length: %u\r\n"
            "Connection: close\r\n\r\n",
-           SESSION_ID, BRIDGE_HOST, (int)BRIDGE_PORT, BRIDGE_TOKEN, (unsigned)wav_len);
+           SESSION_ID, host, (int)BRIDGE_PORT, BRIDGE_TOKEN, (unsigned)wav_len);
   // ---- 请求体：分块写，不假设一次写完 ----
   // 鉴权失败时服务器可能不读 body 就直接回 401。若在上传途中检测到响应
   // 或发送超时，就停止上传、转去解析状态行，避免把 401 误报成上传失败。
@@ -240,7 +242,7 @@ bool httpPostStop(uint32_t* out_ms, int* out_status) {
   WiFiClient c;
   uint32_t t0 = millis();
   if (out_status) *out_status = 0;
-  if (!c.connect(BRIDGE_HOST, BRIDGE_PORT, HTTP_CONNECT_TIMEOUT_MS)) {
+  if (!c.connect(wifiBridgeHost(), BRIDGE_PORT, HTTP_CONNECT_TIMEOUT_MS)) {
     if (out_ms) *out_ms = millis() - t0;
     return false;
   }
@@ -249,7 +251,7 @@ bool httpPostStop(uint32_t* out_ms, int* out_status) {
            "X-Auth: %s\r\n"
            "Content-Length: 0\r\n"
            "Connection: close\r\n\r\n",
-           BRIDGE_HOST, (int)BRIDGE_PORT, BRIDGE_TOKEN);
+           wifiBridgeHost(), (int)BRIDGE_PORT, BRIDGE_TOKEN);
   char line[128];
   bool ok = readLine(c, line, sizeof(line), HTTP_READ_TIMEOUT_MS);
   if (ok && out_status) sscanf(line, "HTTP/%*s %d", out_status);

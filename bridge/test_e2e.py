@@ -57,7 +57,7 @@ def make_input_wav():
     return dst
 
 
-tts = Tts(start_cosyvoice=False)
+tts = Tts(start_cosyvoice=False, start_feiyu=False)
 print("edge worker ready=%s warm_ms=%s" % (tts.edge.ready, tts.edge.info.get("warm_ms")))
 t0 = time.perf_counter()
 asr = Asr("cpu")

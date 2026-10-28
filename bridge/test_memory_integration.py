@@ -23,6 +23,7 @@ import memory_store
 import memory_writer
 import pipeline
 import server
+import songs
 import usage
 
 NOW = datetime(2026, 10, 23, 2, 0, tzinfo=timezone.utc)
@@ -153,7 +154,8 @@ class MemoryTurnIntegrationTest(unittest.TestCase):
                 token_cache=memory_score.TokenCache())
             turn, _blocks = run_turn(bridge, text, "dev1")
         self.assertEqual(seen[0], [
-            {"role": "system", "content": config.DEFAULT_PERSONA},
+            {"role": "system",
+             "content": config.DEFAULT_PERSONA.rstrip() + "\n\n" + songs.prompt_block()},
             {"role": "user", "content": text},
         ])
         self.assertTrue(turn.completed)
@@ -180,7 +182,8 @@ class MemoryTurnIntegrationTest(unittest.TestCase):
                 token_cache=memory_score.TokenCache())
             turn, _blocks = run_turn(bridge, "你好", "dev1")
         self.assertEqual(seen[0], [
-            {"role": "system", "content": config.DEFAULT_PERSONA},
+            {"role": "system",
+             "content": config.DEFAULT_PERSONA.rstrip() + "\n\n" + songs.prompt_block()},
             {"role": "user", "content": "你好"},
         ])
         self.assertIsNone(turn.error)

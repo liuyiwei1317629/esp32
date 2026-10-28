@@ -21,7 +21,22 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
 - `POST /turn?session_id=<id>`，请求体 = **16000 Hz / 16 bit / mono WAV**
 - 响应 = **PCM s16le / 16000 Hz / mono，HTTP chunked**；头 `X-Voice: s16le/16000/mono`、`X-Gen-Id`
 - `POST /stop` 打断当前代次（barge-in）
+- 屏幕（2026-10-28 新增，**默认关闭**，见下面「屏幕推流」）：
+  - `GET /screen` 一条长连接，返回 `multipart/x-mixed-replace; boundary=frame`，每 part 一帧 320×240 JPEG；**不用 chunked**，连接关闭即结束；要 `X-Auth`（无 token 401），`SCREEN_ENABLED=0` 时 503
+  - `POST /screen/key` 设备按键上报（空 body），回 `{"state":"...","anim":"..."}`；同样要 `X-Auth`
 - `X-Auth` 头带共享 token（已配置并实测：无 token 的请求 401）；**API key 只留在本机，绝不下发到设备**
+- 调试台端点（2026-10-27 新增，**纯增量，上面几条一个字节没改**）：
+  - `GET /console` 单页，免鉴权；页面本身不含数据，从本机访问时服务端把 token 注入进去
+  - `GET /api/state` brain active/pinned/cooling / profiles / profile_meta（模型名与价格，**不含密钥**）/ engine / memory / 关键 config
+  - `GET /api/turns?since=N&log_since=M` 增量拉轮次快照与日志行，返回新游标
+  - `GET /api/memory[?text=1]` 默认只回计数，`text=1` 才回记忆原文
+  - `POST /api/text` body `{"text":"..."}`，跳 ASR，其余走同一条流水线
+  - `POST /shutdown` / `POST /restart`（2026-10-28 新增，loopback-only）：关闭 / 重启本机 bridge。重启会先拉一个分离的等待进程（`bridge/relaunch.py`），等旧进程连 worker 一起退出、端口让出来后，再按桌面的 `start-bridge.cmd` 开一个新控制台窗口；旧进程退出前先回 200，页面自动重连
+  - `POST /api/volume`（2026-10-28 新增，loopback-only）：body `{"level":30|50|70|100}`，bridge 在发 PCM 前按档位衰减（原唱和 TTS 都走这条路），档位存 `~/.voice-ai/playback.json`；固件增益不动，所以只影响响度、不改音色
+  - `GET /api/state` 里的 `volume` 字段回报当前档位和可选档位
+  - 切 API 复用原有 `POST /brain`（body `{"profile":"<name>"}`，LAN-only）；调试台只是把它的 UI 做出来了
+  - 这一组都要 `X-Auth`；`/turn` 的行为、响应头、PCM 分块完全不变
+  - 轮次落盘 `~/.voice-ai/console/turns.jsonl`（个人数据，不进仓库）；`CONSOLE_RECORD=0` 关闭
 
 两个 TTS 源的原始采样率是 22050（CosyVoice）和 24000（edge-tts），**都在 worker 内重采样到 16k**，设备侧只管一种格式。
 
@@ -41,7 +56,77 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
 .venv/Scripts/python.exe bridge/server.py --text "今天好累啊" --play --no-cosyvoice
 ```
 
-单元测试：`test_sentence_split.py`（10 项切分规则）、`test_llm.py`（9 项 SSE 解析）、`test_pipeline.py`（10 项并发、打断、本地命令与应急兜底）。这三个是**脚本式**自检（直接 `python test_x.py` 跑，导入即执行），不要放进 `unittest` 清单——它们会在导入时改写 `llm.stream_reply` / `local_plugin.stream_reply` 并污染同进程的其他模块。其余 19 个 `unittest` 模块共 381 例，用显式清单跑，见 `HANDOFF.md` §14.3。
+单元测试：`test_sentence_split.py`（10 项切分规则）、`test_llm.py`（9 项 SSE 解析）、`test_pipeline.py`（10 项并发、打断、本地命令与应急兜底）。这三个是**脚本式**自检（直接 `python test_x.py` 跑，导入即执行），不要放进 `unittest` 清单——它们会在导入时改写 `llm.stream_reply` / `local_plugin.stream_reply` 并污染同进程的其他模块。其余 `unittest` 模块（2026-10-27 新增 `test_console.py` 24 例，2026-10-28 新增 `test_console_restart.py` 9 例、`test_playback.py` 9 例、`test_console_volume.py` 5 例、屏幕 6 模块 35 例；`test_songs.py` 由 6 例增至 11 例）用显式清单跑，共 **35 模块 528 例**，见 `HANDOFF.md` §14.3。屏幕那 6 个**只能在 Windows 本机跑**（要 PIL、微软雅黑和 20 MB 帧库），不要加进 `hermetic.yml`。
+
+## 调试台（2026-10-27）
+
+浏览器打开 `http://127.0.0.1:8080/console`。本机访问时 token 自动注入页面；从局域网 IP 打开要手填 `~/.deepseek/bridge_token`。
+
+- **发一轮**：直接打字（跳 ASR，走 `POST /api/text`）或按住说话（浏览器采 16k WAV，走原 `POST /turn`）
+- **首字节瀑布图**：ASR → LLM 首字 → 凑满首句 → 合成首句 → 送达，一眼看出卡在哪段
+- **本轮卡片**：ASR 原文、回复全文、引擎/模型/字数/tokens、记忆五层装配明细（L1/L2/L3/L4 + token 预算 + 被裁剪的层）、原始 JSON
+- **历史**：右栏按轮次列出首字节耗时，红黄绿分级；点开看详情；`#turn=N` 可直达某一轮
+- **实时日志**：把 stdout 的 `report()` 输出推到页面上，页面自动滚底
+- **session 桶**：`web`（不污染设备记忆）/ `dev1`（与设备共用），选择记在 localStorage
+- **记忆按钮**：显式请求 `?text=1` 才回记忆原文，默认只给计数
+- **切 API**：点顶部 `brain` 胶囊展开下拉，列出 `~/.voice-ai/brains.toml` 里所有 profile（带模型名、价格、冷却状态），点一下即 `POST /brain`，**下一轮生效**，不用重启。下拉里的 profile 数量 = brains.toml 里启用的数量；新增供应商要在那个文件里取消注释并配 `key_file`
+- **一键重启 / 关闭**（2026-10-28）：顶栏「重启」= 停旧 bridge（含肥鱼 worker）→ 等端口让出 → 新开一个「小鱼调试台」命令行窗口 → 页面自动刷新；「关闭」只退出，不重开。两者都只允许本机页面调用
+- **音量下拉**（2026-10-28）：顶栏「音量 小/中/大/满」= 30/50/70/100%，改完立刻生效，板子和页面试听同时变小；页面刷新后从 `/api/state` 读回当前档位
+
+设计约束两条：一是所有调试挂钩都包了 `try`，调试台挂掉不影响一轮真实对话；二是 `build_report()` 的输出与历史 `report()` 逐字一致，不会改变既有的日志阅读习惯和脚本解析。
+
+代码：`console_hub.py`（环形缓冲 + 游标 + 落盘）、`webui/console.html`（单页，原生 JS，无构建，改完刷新即可）、`test_console.py`（24 例，含真实 HTTP 端点测试）。
+
+## 原唱点播（2026-10-28）
+
+说「放《歌名》」「下一首」「再放一遍」时，bridge 在进 LLM 之前就命中 `songs.pick()`，直接把 `songs/<file>.pcm` 按 16k/mono/s16le 流回板子；不调 LLM、不调 TTS，所以开口几乎无延迟。
+
+- 歌单：`songs/playlist.json`，字段 `title`（显示名）、`aliases`（语音里可能说的别名）、`file`（PCM 文件名）、`seconds`、`source`
+- 加歌：把任意音频转成 **16 kHz / mono / s16le** 的 `.pcm` 放进 `songs/`，再在 `playlist.json` 里加一条；`aliases` 写用户可能说的说法。改完重启 bridge（页面「重启」即可）
+- 大模型知道歌单：每轮请求前把 `songs.prompt_block()` 追加到 system 消息，列出当前所有曲名，并说明「放的是原唱、不是本人翻唱」。加歌后自动跟着变，不用改提示词
+- 音量：走上面的 `/api/volume`，对原唱和 TTS 一视同仁；PCM 内容本身不做重采样，只乘系数
+
+## 屏幕推流（2026-10-28，代码完成、未上机）
+
+设备端一块 2.4 寸 ST7789（横屏 320×240）：上面 320×180 是动画，下面 60 px 两行中文。**中文全部由电脑画**，固件没有字库。屏幕没到货，目前只有测试和编译验证。
+
+开关与可调项（都是环境变量，默认值即关闭）：
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `SCREEN_ENABLED` | `0` | 总开关。不开时 `build_screen()` 直接返回，bridge 行为与之前完全一致 |
+| `SCREEN_FPS` | `10` | 推帧率（实测 10 fps ≈ 70 KB/s、7 KB/帧） |
+| `SCREEN_QUALITY` | `75` | 合成 JPEG 的质量 |
+| `SCREEN_RECORD_STUCK_S` | `20.0` | 按键后这么久还没等到 `/turn`，屏自动回待机（防止卡在「正在听…」） |
+| `SCREEN_FONT` | `C:\Windows\Fonts\msyh.ttc` | 屏上中文的字体文件 |
+
+代码分工：
+
+- `screen_config.py` 全部可调项；`screen_hub.py` 状态机（idle 呼吸 / 12 个随机插播 / 按键反应 60%×1–2 s / listening / thinking / playing / error）+ 帧库 LRU
+- `screen_compose.py` 把 320×180 动画和两行中文合成 320×240（实测 3.4 ms/帧）
+- `screen_http.py` 一条长连接广播 + `/screen/key`；只有订阅者存在时才合成，没人看就不烧 CPU
+- `server.py`：`_stream_turn` 里驱动 `turn_begin/first_audio/turn_end`，**只对 `source == "device"` 生效**，调试台打字不会让板子的屏乱跳；原唱点播会把「正在播放 · 歌名」写进文字条
+- 设备断线/电脑关机时，屏上显示烘焙好的「电脑关机了」静态图（固件内置 24,327 B JPEG），不靠桥画
+
+帧库（**生成物，20 MB，未进 git**，换工作区要重建）：
+
+```
+# 需要 WSL 里的 ffmpeg；Windows 侧没有 ffmpeg。源目录是桌宠包 assets/webm
+.venv/Scripts/python.exe bridge/tools/build_screen_frames.py
+```
+
+- 输出 `bridge/screen_frames/<动画名>/0001.jpg…` + `index.json`（25 个动画，2,449 帧，约 20 MB，10 fps，320×180）
+- **色阶必须显式 `in_range=tv:out_range=pc`**：源 webm 是 tv 范围（黑 = Y16）且没有 range 元数据，不写这个黑底会变成 #101010
+- 换动画名要同步 `bridge/tools/frame_names.txt` 和 `screen_hub.py` 里的池子常量
+
+测试：`test_screen_frames_build.py`、`test_screen_config.py`、`test_screen_compose.py`、`test_screen_hub.py`、`test_screen_http.py`、`test_screen_server_hooks.py`（后两个起真 HTTP 服务，端口 0）。
+
+固件侧依赖 **TJpg_Decoder 1.1.0**，本机改过两处（只解内存 JPEG，省 14 KB flash）：
+
+1. `src/User_Config.h` 只留 `#define TJPGD_NO_FFS`，注释掉 `TJPGD_LOAD_SD_LIBRARY`
+2. `src/TJpg_Decoder.h` 第 20 行的 `#if (defined (ARDUINO_ARCH_ESP8266) || defined (ESP32))` 末尾加 `&& !defined (TJPGD_NO_FFS)`
+
+装库时 `arduino-cli lib install` 走不了网（本机代理 7890 已死），是直接下 codeload zip 解到 `D:/Arduino15/user/libraries/TJpg_Decoder`。换机器要重做。
 
 ## 密钥放在工作区外
 

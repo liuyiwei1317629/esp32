@@ -9,6 +9,7 @@ import llm
 import local_commands
 import local_plugin
 import memory_context
+import songs
 from sentence_split import SentenceSplitter
 
 STOP = None
@@ -56,6 +57,10 @@ class Turn:
         self.reply_text = ""
         self.completed = False
         self.selected_ids = []
+        # 调试台要看的记忆装配明细；只在本进程内流转，不进 /turn 响应。
+        self.memory_info = None
+        # 授权目录检索的结果（命中条数/字数）；没开权限时永远是 None。
+        self.file_info = None
         self.local_command = ""
         self.local_plugin = False
         self.local_plugin_failed = False
@@ -157,12 +162,13 @@ class Turn:
         self._flush_tail()
 
     def _messages(self):
+        messages = None
         if config.MEMORY_ENABLED and self.bridge.memory_store is not None:
             writer = self.bridge.memory_writer
             recent_cache = (writer.recent_cache.get(self.session_id)
                             if writer is not None else None)
             try:
-                messages, info = memory_context.build_for_turn(
+                built, info = memory_context.build_for_turn(
                     self.bridge.memory_store, config.DEFAULT_PERSONA,
                     self.session_id, self.user_text,
                     budget_tokens=config.MEMORY_INPUT_BUDGET_TOKENS,
@@ -170,15 +176,26 @@ class Turn:
                     token_cache=self.bridge.token_cache,
                     current_input_max_chars=config.MEMORY_CURRENT_INPUT_MAX_CHARS,
                 )
+                self.memory_info = info
                 if config.MEMORY_DEBUG:
                     print(memory_context.format_debug(info))
                 if not info.get("fallback"):
                     self.selected_ids = list(info.get("selected_ids") or ())
-                    return messages
+                    messages = built
             except Exception:
                 pass
-        return [{"role": "system", "content": config.DEFAULT_PERSONA},
-                {"role": "user", "content": self.user_text}]
+        if messages is None:
+            messages = [{"role": "system", "content": config.DEFAULT_PERSONA},
+                        {"role": "user", "content": self.user_text}]
+        return songs.augment_messages(self._with_files(messages))
+
+    def _with_files(self, messages):
+        """只在本机检索已授权目录；没开权限或没命中就原样返回，不花 token。"""
+        access = getattr(self.bridge, "file_access", None)
+        if access is None:
+            return messages
+        messages, self.file_info = access.apply(messages, self.user_text)
+        return messages
 
     def _tts_stage(self):
         first = True
@@ -231,11 +248,12 @@ class Turn:
 
 class Bridge:
     def __init__(self, tts, memory_store=None, token_cache=None,
-                 memory_writer=None):
+                 memory_writer=None, file_access=None):
         self.tts = tts
         self.memory_store = memory_store
         self.token_cache = token_cache
         self.memory_writer = memory_writer
+        self.file_access = file_access
         self.gen = 0
         self._lock = threading.Lock()
         self._active = None

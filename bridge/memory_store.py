@@ -37,7 +37,7 @@ EPISODE_KINDS = frozenset({
 })
 ALL_KINDS = FACT_KINDS | EPISODE_KINDS
 TOMBSTONE_REASONS = frozenset({
-    "deleted", "demoted", "promoted", "expired", "capacity",
+    "deleted", "demoted", "promoted", "expired", "capacity", "superseded",
 })
 
 MAX_TEXT_CHARS = 200

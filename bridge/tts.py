@@ -19,7 +19,7 @@ class TtsWorker:
     queue at once while it renders them one by one.
     """
 
-    def __init__(self, name, python, script, ready_timeout):
+    def __init__(self, name, python, script, ready_timeout, args=None):
         self.name = name
         self.ready = False
         self.info = {}
@@ -33,8 +33,11 @@ class TtsWorker:
         # The workers write their own UTF-8 protocol bytes; this covers the
         # model's and edge-tts's own prints, which would otherwise hit GBK.
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        # script=None means `python` is a launcher (wsl.exe) and args carries
+        # the whole Linux command line.
+        cmd = [python] + ([os.path.join(HERE, script)] if script else []) + list(args or [])
         self._proc = subprocess.Popen(
-            [python, os.path.join(HERE, script)],
+            cmd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             bufsize=0, cwd=HERE, env=env)
         threading.Thread(target=self._pump_stderr, daemon=True).start()
@@ -110,37 +113,69 @@ class TtsWorker:
 
 
 class Tts:
-    """CosyVoice on the main path, edge-tts as the timeout/error fallback."""
+    """Feiyu (小鱼, in WSL) on the main path, CosyVoice then edge-tts behind it."""
 
-    def __init__(self, start_cosyvoice=True):
+    def __init__(self, start_cosyvoice=True, start_feiyu=None):
+        if start_feiyu is None:
+            start_feiyu = config.FEIYU_ENABLED
         self.edge = TtsWorker("edge", config.SYSTEM_PY, "worker_edge.py", 45)
+        self.feiyu = None
         self.cosy = None
-        if start_cosyvoice:
+        if start_feiyu:
+            threading.Thread(target=self._start_feiyu, daemon=True).start()
+        elif start_cosyvoice:
+            # Feiyu (3.4 GB) and CosyVoice would not both fit in 6 GB of VRAM.
             threading.Thread(target=self._start_cosy, daemon=True).start()
+
+    def _start_feiyu(self):
+        self.feiyu = TtsWorker(
+            "feiyu", config.FEIYU_WSL, None, config.FEIYU_READY_TIMEOUT,
+            args=["-d", config.FEIYU_DISTRO, "--", "/usr/bin/env",
+                  "FEIYU_MODEL_DIR=" + config.FEIYU_MODEL_DIR,
+                  "FEIYU_STYLE=" + config.FEIYU_STYLE,
+                  config.FEIYU_PY, config.FEIYU_SCRIPT])
 
     def _start_cosy(self):
         self.cosy = TtsWorker("cosyvoice", config.PY311, "worker_cosyvoice.py", 180)
 
     def synthesize(self, text):
-        cosy = self.cosy
-        if cosy is not None and cosy.ready:
-            t0 = time.perf_counter()
+        engines = (
+            (self.feiyu, "feiyu", config.FEIYU_TIMEOUT, {}),
+            (self.cosy, "cosyvoice", config.COSYVOICE_TIMEOUT, {"spk": config.COSYVOICE_SPEAKER}),
+        )
+        t0 = time.perf_counter()
+        for worker, engine, timeout, payload in engines:
+            if worker is None or not worker.ready:
+                continue
             try:
-                pcm, ms, samples = cosy.request({"text": text, "spk": config.COSYVOICE_SPEAKER},
-                                                config.COSYVOICE_TIMEOUT)
-                return pcm, {"engine": "cosyvoice", "tts_ms": ms, "samples": samples,
+                pcm, ms, samples = worker.request(dict(payload, text=text), timeout)
+                return pcm, {"engine": engine, "tts_ms": ms, "samples": samples,
                              "fallback": False}
             except (queue.Empty, TimeoutError):
                 pass
             except RuntimeError:
                 pass
-        t0 = time.perf_counter()
         pcm, ms, samples = self.edge.request({"text": text, "voice": config.EDGE_VOICE}, 20)
         return pcm, {"engine": "edge", "tts_ms": ms, "samples": samples,
-                     "fallback": cosy is not None and cosy.ready,
+                     "fallback": any(w is not None and w.ready for w, _, _, _ in engines),
                      "waited_ms": round((time.perf_counter() - t0) * 1000)}
 
     def stop(self):
         self.edge.stop()
+        if self.feiyu is not None:
+            self.feiyu.stop()
+            # terminate() 只杀 Windows 侧的 wsl.exe，Linux 侧的 worker 会活着
+            # 继续占 3.4 GB 显存；这里补一刀，否则下次启动会因显存不足起不来。
+            _reap_feiyu_worker()
         if self.cosy is not None:
             self.cosy.stop()
+
+
+def _reap_feiyu_worker():
+    try:
+        subprocess.run(
+            [config.FEIYU_WSL, "-d", config.FEIYU_DISTRO, "-u", "root",
+             "--exec", "pkill", "-f", "worker_feiyu.py"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        pass
