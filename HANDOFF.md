@@ -628,8 +628,7 @@ funasr-install.log  inst.log  inst2.log  ta-install.log  torch-install.log  tts_
 ## 15. 参考
 
 - 契约与实测：`bridge/README.md`
-- 环境与模型：`README.md`
-- 工程日志：`bridge/工程日志-2026-10-20.md`
+- 环境、选型、工程日志：`项目总结.md`（原 `README.md`、`RUNBOOK.md` 与 `bridge/工程日志-*.md` 已并入并由其取代）
 - 记忆设计：`design/2026-10-23-layered-memory-design.md`
 - 硬件 runbook：`handoff/G-hardware-bringup.md`
 - 四份外包提示词：`handoff/` 目录（B/C/F 归档，G 现役）
