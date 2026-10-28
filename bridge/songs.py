@@ -26,6 +26,12 @@ _GENERIC_PHRASES = ("放首歌", "放一首歌", "唱首歌", "唱一首歌",
 _lock = threading.Lock()
 _state = {"next": 0, "last": None}
 
+RATE = 16000
+BYTES_PER_SEC = RATE * 2
+MAX_UPLOAD_BYTES = 32 * 1024 * 1024
+MAX_SECONDS = 600
+AUDIO_EXTS = (".wav", ".mp3", ".flac", ".ogg")
+
 
 def _norm(text):
     return re.sub(r"[\s\W_]+", "", unicodedata.normalize("NFKC", text or "").lower())
@@ -46,6 +52,135 @@ def load():
             continue
         out.append(dict(item, path=str(path)))
     return out
+
+
+def _read_entries():
+    """歌单原始条目（不管文件在不在），写回时用它保住顺序。"""
+    try:
+        with open(PLAYLIST, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    songs = data.get("songs") if isinstance(data, dict) else None
+    return [s for s in (songs or []) if isinstance(s, dict) and s.get("file")]
+
+
+def _write_entries(items):
+    SONGS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = str(PLAYLIST) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"songs": items}, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    os.replace(tmp, PLAYLIST)
+
+
+def catalog():
+    """调试台用：列出歌单，包括文件已经丢了的条目。"""
+    rows = []
+    for item in _read_entries():
+        path = SONGS_DIR / item["file"]
+        rows.append({"title": item.get("title") or "",
+                     "file": item["file"],
+                     "seconds": item.get("seconds"),
+                     "source": item.get("source"),
+                     "missing": not path.is_file()})
+    return rows
+
+
+def _safe_stem(name):
+    base = os.path.splitext(os.path.basename(str(name or "")))[0]
+    base = unicodedata.normalize("NFKC", base).lower()
+    base = re.sub(r"[^a-z0-9]+", "-", base).strip("-")
+    return base or "song"
+
+
+def _free_name(stem):
+    taken = {item["file"] for item in _read_entries()}
+    candidate = stem + ".pcm"
+    n = 2
+    while candidate in taken or (SONGS_DIR / candidate).exists():
+        candidate = "%s-%d.pcm" % (stem, n)
+        n += 1
+    return candidate
+
+
+def _to_pcm(blob):
+    """任意常见音频 → 16 kHz 单声道 s16le。"""
+    import io
+
+    import numpy as np
+    import soundfile as sf
+
+    try:
+        info = sf.info(io.BytesIO(blob))
+    except Exception as exc:
+        raise ValueError("读不出这个音频：%s" % exc)
+    if info.frames <= 0 or info.samplerate <= 0:
+        raise ValueError("音频是空的")
+    if info.frames / float(info.samplerate) > MAX_SECONDS:
+        raise ValueError("超过 %d 分钟，太长了" % (MAX_SECONDS // 60))
+    try:
+        data, rate = sf.read(io.BytesIO(blob), dtype="float32", always_2d=True)
+    except Exception as exc:
+        raise ValueError("读不出这个音频：%s" % exc)
+    mono = data.mean(axis=1)
+    if rate != RATE:
+        import soxr
+        mono = soxr.resample(mono, rate, RATE)
+    if len(mono) == 0:
+        raise ValueError("音频是空的")
+    peak = float(np.max(np.abs(mono)))
+    if peak > 1.0:
+        mono = mono / peak
+    return (np.clip(mono, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+def add_song(title, name, blob):
+    """把上传的音频转成 PCM 存进歌单，返回写进去的条目。"""
+    ext = os.path.splitext(str(name or ""))[1].lower()
+    if ext not in AUDIO_EXTS:
+        raise ValueError("只支持 wav / mp3 / flac / ogg")
+    if not blob:
+        raise ValueError("文件是空的")
+    if len(blob) > MAX_UPLOAD_BYTES:
+        raise ValueError("文件超过 %d MB" % (MAX_UPLOAD_BYTES // (1024 * 1024)))
+    pcm = _to_pcm(blob)
+    title = (title or "").strip() or os.path.splitext(
+        os.path.basename(str(name)))[0] or "未命名"
+    SONGS_DIR.mkdir(parents=True, exist_ok=True)
+    target = _free_name(_safe_stem(name))
+    path = SONGS_DIR / target
+    with open(path, "wb") as fh:
+        fh.write(pcm)
+    entry = {"title": title, "aliases": [], "file": target,
+             "seconds": round(len(pcm) / float(BYTES_PER_SEC), 3),
+             "source": "upload"}
+    try:
+        _write_entries(_read_entries() + [entry])
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+    reset()
+    return dict(entry, path=str(path))
+
+
+def remove_song(file):
+    """从歌单和磁盘上同时删掉一首；找不到就 KeyError。"""
+    name = os.path.basename(str(file or ""))
+    items = _read_entries()
+    keep = [item for item in items if item["file"] != name]
+    if not name or len(keep) == len(items):
+        raise KeyError(file)
+    try:
+        os.remove(SONGS_DIR / name)
+    except OSError:
+        pass
+    _write_entries(keep)
+    reset()
+    return {"ok": True, "file": name}
 
 
 def reset():

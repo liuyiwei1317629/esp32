@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 import console_hub
 import device_seen
+import emotion
 import file_access
 import llm
 import memory_maintenance
@@ -322,10 +323,13 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/memory/fact", "/api/memory/pin",
                          "/api/memory/delete", "/shutdown", "/restart",
                          "/api/volume", "/screen/key",
+                         "/api/songs", "/api/songs/delete",
                          "/api/permissions/add", "/api/permissions/toggle",
                          "/api/permissions/remove") or not self._authorized():
             return self._reply(401, b'{"error":"bad auth"}', close=True)
         length = int(self.headers.get("Content-Length") or 0)
+        if route == "/api/songs" and length > songs.MAX_UPLOAD_BYTES + 1024:
+            return self._reply(413, b'{"error":"file too large"}', close=True)
         body = self.rfile.read(length) if length else b""
 
         # 只有局域网里的设备（不是本机页面）才算「设备露面」
@@ -362,6 +366,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/text":
             return self._handle_text(body)
 
+        if route.startswith("/api/songs"):
+            return self._handle_songs(route, body)
+
         timers = Timers()
         try:
             text, asr_seconds = self.asr.transcribe_wav(body)
@@ -374,6 +381,33 @@ class Handler(BaseHTTPRequestHandler):
         if song is not None:
             return self._stream_song(song)
         return self._stream_turn(timers, text, source="device")
+    def _handle_songs(self, route, body):
+        """加歌 / 删歌只允许本机：会往磁盘写音频，局域网设备无权。"""
+        if not self._is_loopback():
+            return self._reply(403, b'{"error":"songs edit is loopback-only"}')
+        if route == "/api/songs/delete":
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+                name = str(payload.get("file") or "")
+            except (UnicodeDecodeError, ValueError, AttributeError):
+                return self._reply(400, b'{"error":"bad json"}')
+            try:
+                return self._reply_json(200, songs.remove_song(name))
+            except KeyError:
+                return self._reply(404, b'{"error":"song not found"}')
+        _, _, query = self.path.partition("?")
+        params = urllib.parse.parse_qs(query)
+        title = (params.get("title") or [""])[0]
+        name = (params.get("name") or [""])[0]
+        try:
+            entry = songs.add_song(title, name, body)
+        except ValueError as exc:
+            return self._reply_json(400, {"error": str(exc)})
+        entry.pop("path", None)
+        print("  song add: %s (%s)" % (entry["file"], entry["title"]))
+        sys.stdout.flush()
+        return self._reply_json(200, entry)
+
     def _handle_shutdown(self):
         """一键关闭：只允许本机。先回响应，再在后台收摊，避免客户端拿不到 200。"""
         try:
@@ -645,7 +679,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             for block in turn.pcm_chunks():
                 if hub is not None and not playing:
-                    hub.first_audio()
+                    hub.first_audio(emotion=emotion.tag(turn.reply_text))
                     playing = True
                 pcm_bytes += len(block)
                 self._chunk(playback.apply(block))
@@ -710,7 +744,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(503, b'{"error":"screen disabled"}', close=True)
             return screen_http.write_stream(self, self.screen_streamer)
         if route not in ("/api/state", "/api/turns", "/api/memory",
-                         "/api/usage", "/api/permissions",
+                         "/api/usage", "/api/songs", "/api/permissions",
                          "/api/permissions/dirs"):
             return self._reply(404, b'{"error":"not found"}')
         if not self._authorized():
@@ -721,6 +755,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply_json(200, self._turns_payload())
         if route == "/api/usage":
             return self._reply_json(200, usage_report.report())
+        if route == "/api/songs":
+            if not self._is_loopback():
+                return self._reply(403, b'{"error":"songs are loopback-only"}')
+            return self._reply_json(200, {"songs": songs.catalog()})
         if route.startswith("/api/permissions"):
             # 目录清单暴露本机文件结构，只给本机页面看。
             if not self._is_loopback():

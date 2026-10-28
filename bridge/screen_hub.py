@@ -23,6 +23,16 @@ PLAYING = "悠闲哼歌"
 LISTENING = "东张西望"
 ERROR = "工作状态-垂头叹气冒汗"
 
+# 情绪 → 现有动画。只在开口那一刻选一次，播完自然回到「悠闲哼歌」。
+EMOTION_ANIMS = {
+    "excited": "工作状态-雀跃庆祝",
+    "happy": "点击回应-开心跃动",
+    "sad": "工作状态-垂头叹气冒汗",
+    "angry": "点击回应-傲娇生气",
+    "surprised": "被吓一跳",
+    "shy": "点击回应-害羞惊讶",
+}
+
 HINT_IDLE = "按一下就说话"
 HINT_LISTEN = "正在听…"
 HINT_THINK = "思考中…"
@@ -162,12 +172,12 @@ class ScreenHub:
         self.hint = HINT_THINK
         self._set_anim(THINKING)
 
-    def first_audio(self, hint=None):
-        if self.state == "playing" and hint is None:
+    def first_audio(self, hint=None, emotion=None):
+        if self.state == "playing" and hint is None and emotion is None:
             return
         self.state = "playing"
         self.hint = hint or HINT_PLAY
-        self._set_anim(PLAYING)
+        self._set_anim(EMOTION_ANIMS.get(emotion, PLAYING))
 
     def turn_end(self, ok=True):
         if not ok:

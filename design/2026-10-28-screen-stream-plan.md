@@ -1580,7 +1580,7 @@ Expected: `200` + `multipart/x-mixed-replace`。（未开机/未接线时这一�
 ## Self-Review
 
 - **Spec 覆盖**：§5 版式（B2 320×180+60）✓；§5A.1 情绪（**未覆盖**，见下）✓/✗；§5A.2 随机待机 3–5 分钟 + 池 12 + 30 分钟不重复（B3）✓；§5A.3 按键 60% + 不延迟录音（B4/C2）✓；§5.2 关机图（A2）✓；§6 推流（A1/B4/C2）✓；§7 flash（C2 Step 4 实测）✓。
-- **未覆盖项**：情绪标签。它要改 LLM 提示词 + 验证模型是否稳定输出 `emotion` 字段，属于独立改动，且会动到现在跑通的对话链路（44 项未提交改动里就有 `bridge/llm.py`）。本轮不做，单独排期。
+- **未覆盖项**：情绪标签。它要改 LLM 提示词 + 验证模型是否稳定输出 `emotion` 字段，属于独立改动，且会动到现在跑通的对话链路（44 项未提交改动里就有 `bridge/llm.py`）。本轮不做，单独排期。**2026-10-28 补做（换路线）**：不动提示词、不调模型，改成回复文字的本地关键词判断（`bridge/emotion.py` → `screen_hub.EMOTION_ANIMS`），只在开口那一刻选一次动画，代码与测试完成，未上机。
 - **占位符扫描**：无 TBD/TODO；所有步骤都带可执行命令或代码。
 - **类型一致性**：`ScreenHub` 的方法在 B3 定义、B4/B5 使用（`tick/frame_jpeg/on_key/turn_begin/first_audio/turn_end/turn_error`）一致；`compose(anim, status, hint) -> bytes` 在 B2 定义、B3 调用一致；固件 `lcdInit/lcdFill/lcdBlitFrame` 在 C1 定义、C2 调用一致；`kOfflineJpg/kOfflineJpgLen` 在 A2 生成、C2 引用一致。
 - **风险**：`MADCTL=0x60` 与 `INVON` 是凭常见模块经验写的，颜色反了/方向不对时只改这两行；`TJpg_Decoder` 未在本机编译过，C1 第一步就要验证能编过。

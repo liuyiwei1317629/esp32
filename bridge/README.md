@@ -31,6 +31,7 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
   - `GET /api/turns?since=N&log_since=M` 增量拉轮次快照与日志行，返回新游标
   - `GET /api/memory[?text=1]` 默认只回计数，`text=1` 才回记忆原文
   - `GET /api/usage`（2026-10-28 新增）：只读汇总 `~/.voice-ai/usage.jsonl`，回今日/本月/累计金额、轮数、未计价轮数、按大脑拆分；日/月界按本机时区算。**只看账，不设上限、不拦调用**。调试台顶栏「花费」胶囊就是它
+  - `GET /api/songs`、`POST /api/songs?title=&name=`、`POST /api/songs/delete`（2026-10-28 新增，loopback-only）：看歌单 / 加歌 / 删歌。加歌 body 是**原始音频字节**，`name` 是原文件名（决定格式），`title` 留空就用文件名；服务端转成 16 kHz 单声道 s16le 存进 `songs/`，只收 wav/mp3/flac/ogg，≤32 MB、≤10 分钟，超过回 400/413。删除 body `{"file":"x.pcm"}`，文件也一起删。歌单每轮现读，加/删**立刻生效、不用重启**。调试台「歌曲」按钮是它的 UI
   - `POST /api/text` body `{"text":"..."}`，跳 ASR，其余走同一条流水线
   - `POST /shutdown` / `POST /restart`（2026-10-28 新增，loopback-only）：关闭 / 重启本机 bridge。重启会先拉一个分离的等待进程（`bridge/relaunch.py`），等旧进程连 worker 一起退出、端口让出来后，再按桌面的 `start-bridge.cmd` 开一个新控制台窗口；旧进程退出前先回 200，页面自动重连
   - `POST /api/volume`（2026-10-28 新增，loopback-only）：body `{"level":30|50|70|100}`，bridge 在发 PCM 前按档位衰减（原唱和 TTS 都走这条路），档位存 `~/.voice-ai/playback.json`；固件增益不动，所以只影响响度、不改音色
@@ -104,9 +105,10 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
 代码分工：
 
 - `screen_config.py` 全部可调项；`screen_hub.py` 状态机（idle 呼吸 / 12 个随机插播 / 按键反应 60%×1–2 s / listening / thinking / playing / error）+ 帧库 LRU
+- `emotion.py` 情绪关键词（2026-10-28 新增）：只读回复文字，长词优先、命中多的赢、同分看谁先出现；映射到 `EMOTION_ANIMS` 里已有的 6 段动画（兴奋/开心/难过/生气/惊讶/害羞），没命中就用「悠闲哼歌」。**不改提示词、不调模型**，换判定只改这一个文件
 - `screen_compose.py` 把 320×180 动画和两行中文合成 320×240（实测 3.4 ms/帧）
 - `screen_http.py` 一条长连接广播 + `/screen/key`；只有订阅者存在时才合成，没人看就不烧 CPU
-- `server.py`：`_stream_turn` 里驱动 `turn_begin/first_audio/turn_end`，**只对 `source == "device"` 生效**，调试台打字不会让板子的屏乱跳；原唱点播会把「正在播放 · 歌名」写进文字条
+- `server.py`：`_stream_turn` 里驱动 `turn_begin/first_audio/turn_end`，**只对 `source == "device"` 生效**，调试台打字不会让板子的屏乱跳；开口那一刻按回复文字挑情绪动画；原唱点播会把「正在播放 · 歌名」写进文字条
 - 设备断线/电脑关机时，屏上显示烘焙好的「电脑关机了」静态图（固件内置 24,327 B JPEG），不靠桥画
 
 帧库（**生成物，20 MB，未进 git**，换工作区要重建）：
@@ -120,7 +122,7 @@ worker 之间是 stdin/stdout 的 JSON-lines，PCM 用 base64 传递。日志在
 - **色阶必须显式 `in_range=tv:out_range=pc`**：源 webm 是 tv 范围（黑 = Y16）且没有 range 元数据，不写这个黑底会变成 #101010
 - 换动画名要同步 `bridge/tools/frame_names.txt` 和 `screen_hub.py` 里的池子常量
 
-测试：`test_screen_frames_build.py`、`test_screen_config.py`、`test_screen_compose.py`、`test_screen_hub.py`、`test_screen_http.py`、`test_screen_server_hooks.py`（后两个起真 HTTP 服务，端口 0）。
+测试：`test_screen_frames_build.py`、`test_screen_config.py`、`test_screen_compose.py`、`test_screen_hub.py`、`test_screen_http.py`、`test_screen_server_hooks.py`（后两个起真 HTTP 服务，端口 0）；情绪：`test_emotion.py`、`test_server_emotion.py`；歌单接口：`test_songs.py`、`test_console_songs.py`。
 
 固件侧依赖 **TJpg_Decoder 1.1.0**，本机改过两处（只解内存 JPEG，省 14 KB flash）：
 

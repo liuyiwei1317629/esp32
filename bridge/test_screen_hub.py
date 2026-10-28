@@ -125,5 +125,43 @@ class HubTests(unittest.TestCase):
         self.assertEqual(self.hub.state, "idle")
 
 
+    def test_first_audio_without_emotion_uses_playing_anim(self):
+        self.hub.turn_begin()
+        self.hub.first_audio()
+        self.assertEqual(self.hub.anim, sh.PLAYING)
+
+    def test_emotion_picks_its_animation(self):
+        for emo, anim in sh.EMOTION_ANIMS.items():
+            hub = sh.ScreenHub(lib=None, clock=FakeClock(), rng=sh.random.Random(1))
+            hub.turn_begin()
+            hub.first_audio(emotion=emo)
+            self.assertEqual(hub.anim, anim)
+            self.assertEqual(hub.state, "playing")
+
+    def test_unknown_or_calm_emotion_falls_back_to_playing(self):
+        for emo in (None, "calm", "nonsense"):
+            hub = sh.ScreenHub(lib=None, clock=FakeClock(), rng=sh.random.Random(1))
+            hub.turn_begin()
+            hub.first_audio(emotion=emo)
+            self.assertEqual(hub.anim, sh.PLAYING)
+
+    def test_emotion_anims_all_exist_in_library_index(self):
+        import json
+        with open("screen_frames/index.json", encoding="utf-8") as fh:
+            names = set(json.load(fh))
+        for anim in sh.EMOTION_ANIMS.values():
+            self.assertIn(anim, names)
+
+    def test_turn_end_leaves_emotion_anim(self):
+        self.hub.turn_begin()
+        self.hub.first_audio(emotion="happy")
+        clock = self.hub.clock
+        clock.t = 10
+        self.hub.tick()
+        self.assertEqual(self.hub.anim, sh.EMOTION_ANIMS["happy"])   # 动画本身是循环的
+        self.hub.turn_end()
+        self.assertEqual(self.hub.anim, sh.BREATHING)
+
+
 if __name__ == "__main__":
     unittest.main()
