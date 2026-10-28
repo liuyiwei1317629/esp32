@@ -104,6 +104,20 @@ class WriterTest(unittest.TestCase):
         self.assertEqual(session["sticky_goal"], "用户明天要交设计稿")
         self.assertEqual(session["sticky_todo_id"], todo["id"])
 
+    def test_every_completed_turn_writes_one_event_episode(self):
+        writer = self.make_writer()
+        self.assertTrue(writer.enqueue(make_job(
+            user="今天有点累", assistant="那先歇会儿。")))
+        self.assertTrue(writer.wait_idle())
+
+        events = [item for item in self.store.active_episodes()
+                  if item.get("kind") == "event"]
+        self.assertEqual(len(events), 1)
+        self.assertIn("今天有点累", events[0]["text"])
+        self.assertIn("那先歇会儿", events[0]["text"])
+        self.assertEqual(events[0]["source"], "turn")
+        self.assertIsNotNone(events[0].get("event_at"))
+
     def test_incomplete_job_is_rejected_without_writing(self):
         writer = self.make_writer()
         before = snapshot(self.root)

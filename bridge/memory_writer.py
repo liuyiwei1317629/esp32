@@ -24,6 +24,7 @@ SEEN_GEN_LIMIT = 8192
 HIT_FLUSH_TURNS = 5
 SHUTDOWN_WAIT_SECONDS = 2.0
 MIN_CONFIDENCE = 0.7
+TURN_EPISODE_CHARS = 60
 
 _STOP = object()
 
@@ -303,6 +304,7 @@ class MemoryWriter:
             now,
         )
         self.store.save_session(job.session_id, session, now=now)
+        self._write_turn_episode(job, now)
         self._bump("written_jobs")
         self._record_hits(job)
         if self._maintenance_active():
@@ -336,6 +338,20 @@ class MemoryWriter:
             except Exception:
                 self._bump("write_errors")
         return todo_record
+
+    def _write_turn_episode(self, job, now):
+        """每一轮完整对话落一条 event，构成五层记忆里的「经历」层。"""
+        user = memory_store.clip_text(job.user, TURN_EPISODE_CHARS)
+        assistant = memory_store.clip_text(job.assistant, TURN_EPISODE_CHARS)
+        if not user or not assistant:
+            return None
+        try:
+            return self.store.upsert_episode(
+                "event", "用户：%s ／ 我：%s" % (user, assistant),
+                source="turn", event_at=now, now=now)
+        except Exception:
+            self._bump("write_errors")
+            return None
 
     def _assemble_session(self, job, todo_text, todo_id, now):
         session = self.store.load_session(job.session_id)
