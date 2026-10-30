@@ -181,6 +181,20 @@ static constexpr uint32_t PORTAL_MAX_MS     = 10UL * 60UL * 1000UL;
 static constexpr uint32_t MDNS_REFRESH_MS   = 5UL * 60UL * 1000UL;
 static constexpr uint32_t MDNS_RETRY_MS     = 60UL * 1000UL;
 
+// ===== 语音唤醒（“小鱼”，离线，MultiNet mn7_cn）=====
+// 原理：不用 WakeNet（“Hi ESP” 专用模型已从模型分区移除）；把“小鱼”
+// 注册为 MultiNet 中文命令词，命中即唤醒，走与 BOOT 键完全相同的
+// 录音 -> 上传 -> 播放流程。模型分区内容见 firmware/tools/srmodels.bin。
+// ⚠️ 分区方案必须用 custom（草图自带 partitions.csv：5MB APP/6.9MB SPIFFS/
+//    4MB MODEL@0xBF0000），否则 flash 里没有 “model” 分区，wakeWordInit()
+//    会直接失败。
+static constexpr bool        WAKE_WORD_ENABLE      = true;
+static constexpr const char* WAKE_WORD_PINYIN      = "ni hao xiao yu";  // “你好小鱼”，拼音不带声调
+static constexpr float       WAKE_DET_THRESHOLD    = 0.50f;      // 命中阈值；误唤醒多就调高，喊不应就调低
+static constexpr int         WAKE_DET_TIMEOUT_MS   = 6000;      // 检测器超时（超时自动复位）
+// 恢复监听前丢弃的输入时长：提示音/回复播放的余音不能进唤醒检测器。
+static constexpr uint32_t    WAKE_RESUME_DISCARD_MS = 1200;
+
 // ===== 按键 =====
 static constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;  // 去抖；不用长按/双击等复杂手势
 

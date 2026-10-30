@@ -346,6 +346,11 @@ static uint32_t s_playPeak = 0;
 //      会把底噪一起抬起来（实测踩过这个坑）。
 //   3) 软限幅：绝不硬削顶（硬削顶的方波谐波就是"刺耳噪音"的来源）。
 // 返回写入目标缓冲的字节数（= 样本数 × 4）。
+// 开播淡入：功放使能瞬间和第一个样本突变会「啪」一声。
+// 前 20 ms 线性淡入，把突变摊平；配合开播前的静音垫（见 P_PLAYING 入口）。
+static constexpr uint32_t PLAY_FADE_SAMPLES = AUDIO_SAMPLE_RATE / 50;  // 20 ms
+static uint32_t s_fadePos = 0;
+
 static inline size_t monoToStereoGain(const uint8_t* src, size_t srcBytes, uint8_t* dst) {
   const int16_t* in  = reinterpret_cast<const int16_t*>(src);
   int16_t*       out = reinterpret_cast<int16_t*>(dst);
@@ -354,6 +359,10 @@ static inline size_t monoToStereoGain(const uint8_t* src, size_t srcBytes, uint8
 
   for (size_t i = 0; i < n; i++) {
     int32_t v = ((int32_t)in[i] * PLAY_FIXED_GAIN_Q8) >> 8;
+    if (s_fadePos < PLAY_FADE_SAMPLES) {
+      v = (int32_t)(((int64_t)v * (int64_t)s_fadePos) / (int64_t)PLAY_FADE_SAMPLES);
+      s_fadePos++;
+    }
     int16_t s = (int16_t)softLimit(v);
     out[i * 2]     = s;   // 左槽
     out[i * 2 + 1] = s;   // 右槽
@@ -390,6 +399,10 @@ static void playerTask(void*) {
       if (avail >= PLAY_PREBUFFER_BYTES || (s_end && avail > 0)) {
         rxDisable();   // 必须先关话筒那一路，否则功放收不到有效帧（见 rxDisable 注释）
         txEnable();
+        // 先送一帧静音让功放站定，再开始真实音频（否则开播有一下「啪」）
+        memset(stereo, 0, PLAY_FRAME_BYTES * 2);
+        size_t pad = 0;
+        i2s_channel_write(s_tx, stereo, PLAY_FRAME_BYTES * 2, &pad, pdMS_TO_TICKS(100));
         s_state = P_PLAYING;
       } else if (s_end && avail == 0) {
         s_end = false;
@@ -433,6 +446,7 @@ void playerBegin() {
   s_underruns = 0;
   s_played = 0;
   s_playPeak = 0;
+  s_fadePos = 0;
   s_end = false;
   s_abort = false;
   s_state = P_FILLING;

@@ -12,6 +12,7 @@
 #include "http_turn.h"
 #include "screen_client.h"
 #include "wifi_setup.h"
+#include "wake_word.h"
 
 #if APP_MODE != APP_MODE_RECORD_ONLY
   #if __has_include("secrets.h")
@@ -26,6 +27,7 @@ static AppState s_state = ST_IDLE;
 
 static uint8_t* s_rec = nullptr;   // PSRAM 录音缓冲（纯 PCM，不含 WAV 头）
 static bool s_waitRelease = false; // 打断后须先松开按键，避免同一次按键又触发录音
+static bool s_recFromWake = false; // 本次录音由“小鱼”语音唤醒触发（无按键，靠静音收尾）
 
 // ---------------- 按键（GPIO0，低有效，30 ms 去抖） ----------------
 static bool rawDown() { return digitalRead(PIN_BUTTON) == LOW; }
@@ -90,7 +92,8 @@ static bool wifiEnsure() { return wifiSetupEnsure(); }
 
 // ---------------- 录音：松手 / 静音 1.2 s / 最长 15 s ----------------
 // 返回 PCM 字节数；0 表示丢弃（太短或错误）。PCM 写入 s_rec。
-static size_t recordClip(uint32_t* out_ms) {
+// fromWake=true（“小鱼”唤醒）：没有按键可松，结束只靠 静音 1.2s / 超时 / 缓冲满。
+static size_t recordClip(uint32_t* out_ms, bool fromWake) {
   constexpr size_t FRAME_SAMPLES = 320;      // 20 ms @ 16 kHz
   static int32_t raw[FRAME_SAMPLES];
   uint32_t t0 = millis();
@@ -101,6 +104,7 @@ static size_t recordClip(uint32_t* out_ms) {
   int32_t raw_min = INT32_MAX, raw_max = INT32_MIN; double raw_sq = 0; uint32_t n_raw = 0;
   int16_t s16_min = INT16_MAX, s16_max = INT16_MIN;
   bool voiceYet = false;
+  int voiceRun = 0;       // 连续超阈值的帧数（防提示音余音被当成人声）
   float noiseFloor = 200.0f;   // 环境底噪估计（s16 RMS），随静音帧缓慢下探
 
   // 丢掉开头 5 帧（100 ms）。提示音播完到 I2S RX 重新使能之间会吃到一次
@@ -110,8 +114,8 @@ static size_t recordClip(uint32_t* out_ms) {
   for (int i = 0; i < 5; i++) micReadRaw(raw, FRAME_SAMPLES, 50);
 
   for (;;) {
-    // 结束条件：松开按键 / 静音 1.2 s（仅在人声出现之后）/ 最长 15 s
-    if (!debouncedDown()) { s_waitRelease = false; break; }
+    // 结束条件：松开按键（仅按键录音）/ 静音 1.2 s（仅在人声出现之后）/ 最长 15 s
+    if (!fromWake && !debouncedDown()) { s_waitRelease = false; break; }
     uint32_t now = millis();
     if (now - t0 >= REC_MAX_MS) break;
     if (total_bytes + FRAME_SAMPLES * 2 > REC_BUF_BYTES) break;
@@ -142,12 +146,20 @@ static size_t recordClip(uint32_t* out_ms) {
     float thr = noiseFloor * REC_VAD_FACTOR;
     if (thr < (float)REC_VAD_MIN_RMS) thr = (float)REC_VAD_MIN_RMS;
 
-    if (frame_rms > thr) {
-      voiceYet = true;
+    // 唤醒触发时，「嘀」声和功放余音会顶过 VAD 阈值；若把它当人声，
+    // 用户还没开口就按 1.2 s 静音收尾，录到空片段。前 0.8 s 不判开口，
+    // 且要连续 3 帧（60 ms）超过阈值才算真的开口。
+    const bool loud = (frame_rms > thr);
+    const bool onsetOk = (millis() - t0 >= (fromWake ? 800u : 0u));
+    if (loud && onsetOk) {
+      if (++voiceRun >= 3) voiceYet = true;
       last_voice = millis();
-    } else if (!voiceYet && frame_rms < noiseFloor) {
-      // 只在人声出现前跟踪底噪（慢速下探），开口后不再改阈值
-      noiseFloor = noiseFloor * 0.9f + frame_rms * 0.1f;
+    } else if (!loud) {
+      voiceRun = 0;
+      if (!voiceYet && frame_rms < noiseFloor) {
+        // 只在人声出现前跟踪底噪（慢速下探），开口后不再改阈值
+        noiseFloor = noiseFloor * 0.9f + frame_rms * 0.1f;
+      }
     }
 
     if (voiceYet && (millis() - last_voice >= REC_SILENCE_END_MS)) break;
@@ -337,6 +349,11 @@ void setup() {
   audioInit();
   sineInit();          // 1024 点正弦表，playTone 查表用（一次算好，之后零浮点累积）
   delay(200);
+  if (WAKE_WORD_ENABLE) {
+    // “小鱼”离线唤醒。失败（模型分区缺失/内存不足）只关掉语音唤醒，
+    // BOOT 键录音流程完全不受影响 —— 卡在这里只会让整机变砖，不值得。
+    wakeWordInit();
+  }
 #if APP_MODE == APP_MODE_TURN_STOP
   httpSetAbortPoll(abortPoll);
 #endif
@@ -354,10 +371,25 @@ void loop() {
 #if APP_MODE != APP_MODE_RECORD_ONLY
       wifiSetupPollSerial();   // 串口 portal / forget
 #endif
+      // ---- 语音唤醒“小鱼”：IDLE 态常开监听 ----
+      // 录音/上传/播放结束后回到 IDLE 的第一圈先恢复监听（内部会丢弃
+      // 功放余音再开始检测），之后每圈喂一帧给 AFE+MultiNet。
+      if (WAKE_WORD_ENABLE && wakeWordReady() && !wakeWordEnabled()) wakeWordResume();
+      if (WAKE_WORD_ENABLE && wakeWordPoll()) {     // 命中“小鱼”
+        wakeWordSuspend();                          // 录音期间停监听，避免争抢麦克风
+        s_recFromWake = true;
+        screenNotifyKey();                          // 联网提示与按键路径一致
+        playTone(1000, 60, 4000);                   // “嘀” = 开始录音
+        s_state = ST_RECORDING;
+        logState("RECORDING(wake)");
+        break;
+      }
       bool down = debouncedDown();
       if (!down) s_waitRelease = false;
       if (down && !s_waitRelease) {   // 按住 BOOT 开始录音
         s_waitRelease = true;         // 防止 RECORD_ONLY/错误早退后按住键重复触发
+        wakeWordSuspend();            // 按键录音同样要停唤醒监听
+        s_recFromWake = false;
         screenNotifyKey();            // 只置标志：联网在屏幕任务里做，录音不等它
         playTone(1000, 60, 4000);     // "嘀" = 开始录音（电平压低，减少被话筒拾取）
         s_state = ST_RECORDING;
@@ -369,7 +401,7 @@ void loop() {
 
     case ST_RECORDING: {
       uint32_t rec_ms = 0;
-      size_t pcm_bytes = recordClip(&rec_ms);
+      size_t pcm_bytes = recordClip(&rec_ms, s_recFromWake);
       if (pcm_bytes == 0) {
         s_state = ST_IDLE;
         logState("IDLE");

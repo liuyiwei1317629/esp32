@@ -7,6 +7,8 @@ build/
 *.elf
 *.map
 *.partitions.bin
+# ESP-SR 源模型包：与 srmodels.bin 同规矩不入库（来历见 HANDOFF.md）
+tools/srmodels_pack/
 
 # 系统杂项
 .DS_Store

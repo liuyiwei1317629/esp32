@@ -6,6 +6,53 @@
 > 文件清单：第 13 节；维护、修改、扩展：第 14 节。  
 > 本文不含密钥、token、完整会话记录；不要把任何密钥或录音内容补进来。
 
+## 2026-10-29 状态更新（语音唤醒"小鱼"，优先于下文）
+
+- **离线唤醒"小鱼"已实现并上机跑通（2026-10-29）**。机制：不用 WakeNet（官方只有 "Hi ESP" 模型，无法改词）；
+  用 MultiNet 中文命令识别（mn7_cn），把"小鱼"（拼音 `xiao yu`）注册为唯一命令词，命中即唤醒，
+  走与 BOOT 键完全相同的 录音→上传→播放 流程。"Hi ESP" 从机制上不可能再触发
+  （模型分区里已无任何 wakenet 模型）。
+- **新文件**：`firmware/voice_terminal/wake_word.{h,cpp}`（AFE+MultiNet 驱动）、
+  `firmware/voice_terminal/partitions.csv`（custom 分区：5MB APP / 6.9MB SPIFFS / 4MB MODEL@0xBF0000；
+  文件必须无 BOM、无注释行，ESP32 Arduino 的分区解析器两种都不认）、
+  `firmware/tools/srmodels_pack/`（mn7_cn + vadnet1_medium + fst 源模型，2.9 MB，按 `*.bin` 同规矩不入库）、
+  `firmware/tools/srmodels.bin`（重打包，2,969,416 B）+ `srmodels_stock_3.3.12.bin`（原厂备份），两者同样不入库。
+- **模型包来历（2026-10-30 逐字节核实）**：`srmodels_pack/vadnet1_medium/*` 与 `fst/commands_cn.txt`
+  原样出自原厂 `srmodels_stock_3.3.12.bin`；`srmodels_pack/mn7_cn/*` **不在**原厂包里（比不到），
+  是本批新增的中文 MultiNet 模型，出处未记录在此前任何文档中——重建 `srmodels.bin` 前必须先确认它的来源。
+- **修改**：`config.h`（唤醒参数）、`voice_terminal.ino`（IDLE 态跑 `wakeWordPoll()`，
+  录音/上传/播放期间 `wakeWordSuspend()/Resume()`）。
+- **工具链动了一处**：`D:/Arduino15/.../esp32s3-libs/3.3.12/esp_sr/srmodels.bin` 已被替换为新模型包
+  （原厂备份在 `firmware/tools/srmodels_stock_3.3.12.bin`）。重装或升级 esp32 core 后需重放。
+- **构建命令**（APP 必须用 custom 分区，esp_sr_16 的 3MB APP 装不下带唤醒的 TURN_STOP）：
+  `D:/arduino-cli/arduino-cli.exe --config-file D:/arduino-cli/arduino-cli.yaml compile --fqbn 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=custom,CDCOnBoot=default' --build-property 'build.extra_flags=-DAPP_MODE=2' firmware/voice_terminal`
+  实测：TURN_STOP 2,574,083 B（custom 分区 16%，中文命令表替换后不再链接 flite），0 error 0 warning。
+- **烧录（三段）**：app → 0x10000；bootloader/otadata 正常流程；**`srmodels.bin` → 0xBF0000**（model 分区）。
+  Arduino 的上传配方不会自动烧模型（只拷进构建目录），必须单独执行：
+  `esptool write_flash 0xBF0000 srmodels.bin`。若用官方 esp_sr_16 分区则模型地址是 0xC10000——本工程不用它。
+- **验证方法（上机后）**：① 上电后对设备说"小鱼"，应听到与按键相同的效果（开始录音的"嘀"声）；
+  ② 说"Hi ESP"，应无任何反应；③ 串口看 `wake: ...` 日志：init 成功会打印 mn7_cn 模型名，
+  命中打印 DETECTED；④ 原 BOOT 键录音、上传、播放、打断流程应完全不变。
+  误唤醒多 → 调高 `WAKE_DET_THRESHOLD`（config.h，现 0.50）；喊不应 → 调低。
+- **2026-10-29 上机后修掉的四个坑**（都已在真机验证）：
+  1. **中文命令被拒**：Arduino 侧 `esp_mn_speech_commands.c` 被 `CONFIG_SR_MN_EN_MULTINET7_QUANT`
+     带进英文 g2p 分支，用 flite 给拼音做音素化，`check_speech_command` 全部失败（err=259）。
+     修法：草图新增 `esp_mn_commands_cn.c`（esp-sr 2.5.3 同源，删 `flite_g2p.h`、三处英文分支改 `#if 0`），
+     靠「草图中的同名 .c 先于静态库被链接」覆盖。副作用：不再链接 flite，APP 从 3,195,507 B 降到
+     2,574,083 B。
+  2. **主循环卡死**：`fetch_with_delay(...,0)` 之后用 `while` 排空会永远退不出来（AFE 输出队列不会空），
+     表现为开机第一圈就死、没有 `idle tick`、屏幕任务还在跑。修法：每次 `feed` 只 `fetch` 一帧。
+  3. **自回声/提示音被当人声**：回复里出现"小鱼"会把设备自己唤醒（prob 0.90，随后录到静音）。
+     修法：`WAKE_RESUME_DISCARD_MS` 350 → 1200 ms；唤醒录音开头 0.8 s 不判人声、且要连续 3 帧
+     超阈值才算开口（否则"嘀"的余音会让录音在用户开口前就按 1.2 s 静音收尾）。
+  4. **开播"啪"一声**：功放使能瞬态 + 第一个样本突变。修法：`audio_io.cpp` 开播先送一帧静音，
+     再对前 20 ms 做线性淡入（`PLAY_FADE_SAMPLES`）。
+- **唤醒词 2026-10-29 改为四字「你好小鱼」**（拼音 `ni hao xiao yu`）：两字"小鱼"对 MultiNet 太短，
+  实测命中概率在 0.58–0.98 间大幅波动、需要重复喊。
+- **上机实测（2026-10-29）**：`wake: detected ' ni hao xiao yu' prob 0.79`；完整链路
+  `record_ms≈3 s → upload status=200 first_pcm_ms 4.4–8.3 s → play_ms 4.8–7.4 s → result=ok`，
+  零欠载；回答播完不再自触发。
+
 ## 2026-10-27 状态更新（优先于下文）
 
 - **硬件已接线上电**：2026-10-26 本地录放链路定稿可用（无沙沙、响度一致、无破音），快照 `firmware/voice_terminal/snapshots/2026-10-26_final-v3/`，参数 `CLIP_TARGET_RMS=2700` / `CLIP_GAIN_MAX=8.0`。**联网两模式 2026-10-27 已上机验证**：TURN 多轮 `result=ok`、`first_pcm_ms` 2.2–4.2 s；TURN_STOP 播放中按 BOOT 打断 `stop_ms=20/18`、`result=aborted`（本地先静音再 POST `/stop`）。当前烧的是 `APP_MODE_TURN_STOP`；打断只在出声后生效（用户当天确认）。硬件事实以 `HANDOVER-G.md` 为准。
