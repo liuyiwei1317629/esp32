@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>voice-ai 调试台</title>
+<script>
+/* 大字模式默认开，且要在首屏渲染前生效，否则会先闪一下小字 */
+try { if (localStorage.getItem("voiceConsoleBig") !== "0") document.documentElement.classList.add("big"); } catch (e) {}
+</script>
 <style>
 :root{
   --bg:#f5f6f8; --panel:#fff; --panel2:#fafbfc; --border:#dfe3e8; --border2:#eceef1;
@@ -40,16 +44,20 @@ button:disabled{opacity:.45;cursor:not-allowed}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.primary:hover:not(:disabled){filter:brightness(1.08);color:#fff}
 button.danger{color:var(--bad);border-color:var(--bad)}
+button.on{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
+button.mini{padding:2px 10px;font-size:12px}
 input,textarea,select{font:inherit;color:var(--text);background:var(--panel);
   border:1px solid var(--border);border-radius:7px;padding:7px 10px;outline:none}
 input:focus,textarea:focus,select:focus{border-color:var(--accent)}
 
 /* ---------- 顶栏 ---------- */
-header{display:flex;align-items:center;gap:10px;padding:8px 14px;
-  background:var(--panel);border-bottom:1px solid var(--border);flex:none;flex-wrap:wrap}
+/* 两排：上排是状态胶囊，下排是操作按钮。这样字放大后也不会挤成一团。 */
+header{display:flex;flex-direction:column;gap:6px;padding:7px 14px;
+  background:var(--panel);border-bottom:1px solid var(--border);flex:none}
+.hrow{display:flex;align-items:center;gap:9px;flex-wrap:wrap;min-width:0}
+.hrow.acts{justify-content:flex-end;gap:6px}
 .brand{font-weight:650;font-size:14px;letter-spacing:.2px}
-.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto}
-.chips select{padding:3px 8px;font-size:11.5px;border-radius:20px;color:var(--dim);
+.hrow.acts select{padding:3px 8px;font-size:11.5px;border-radius:20px;color:var(--dim);
   background:var(--panel2);border-color:var(--border2)}
 .chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;
   font-size:11.5px;background:var(--panel2);border:1px solid var(--border2);color:var(--dim);
@@ -79,6 +87,21 @@ header{display:flex;align-items:center;gap:10px;padding:8px 14px;
 .menu .it .md{font-size:10.5px;color:var(--dim);flex:1;min-width:0;
   overflow:hidden;text-overflow:ellipsis}
 .menu .it .tag{flex:none;margin-left:auto;padding-left:10px;font-size:10px;color:var(--faint)}
+
+/* ---------- 表情卡 ---------- */
+.emo-body{display:grid;grid-template-columns:1fr;gap:8px}
+.emo-body #emoPrev{width:100%;max-height:170px;object-fit:contain;display:block;
+  border-radius:8px;border:1px solid var(--border2);background:#000}
+.emo-body .actions{margin-top:0}
+/* 原案 16 组：组名 + 按钮，整块自己滚 */
+.emo-find-wrap{border-top:1px solid var(--border2);padding-top:6px}
+.emo-find{width:100%;box-sizing:border-box;margin-bottom:6px;font-size:12px;
+  padding:4px 8px;border-radius:6px;border:1px solid var(--border2);
+  background:transparent;color:inherit}
+.emo-find:focus{outline:none;border-color:var(--accent, #6cf)}
+.emo-cat{max-height:210px;overflow:auto}
+.emo-cat .cat-t{font-size:11px;color:var(--faint);margin:8px 0 4px}
+.emo-cat .cat-g:first-child .cat-t{margin-top:0}
 
 /* ---------- 主区 ---------- */
 main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
@@ -174,33 +197,69 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
   background:var(--text);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:12.5px;
   opacity:0;transition:.22s;pointer-events:none;z-index:60;max-width:80vw}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ---------- 大字模式 ---------- */
+/* 默认开：偏好存在 localStorage，顶栏右侧「大字」按钮可关。
+   只放大字号和行高，不改布局结构。 */
+html.big body{font-size:15px;line-height:1.6}
+html.big .brand{font-size:16.5px}
+html.big .chip{font-size:13px;padding:4px 11px}
+html.big .dot{width:7px;height:7px}
+html.big .hrow.acts select{font-size:13px;padding:4px 10px}
+html.big button{font-size:14px;padding:7px 13px}
+html.big button.mini{font-size:13.5px;padding:4px 12px}
+html.big .hint{font-size:13px}
+html.big .card>h2{font-size:12.5px}
+html.big .bubble{font-size:15px;line-height:1.7}
+html.big .bubble .who{font-size:11.5px}
+html.big .hitem .l1{font-size:12.5px}
+html.big .hitem .l2{font-size:14px}
+html.big #logBody{font-size:13px}
+html.big #textInput{font-size:15px}
+html.big .metric .k{font-size:11.5px}
+html.big .metric .v{font-size:16px}
+html.big .wf{height:30px}
+html.big .menu .it{font-size:13px}
+html.big .tag{font-size:11px}
+
 @media (max-width:900px){
-  main{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) 220px 130px}
-  .col.hist-col{display:none}
+  /* 窄窗口只收起「历史」；「表情」是要点的控件，不能跟着一起藏 */
+  main{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto 130px}
+  .col.hist-col{overflow:visible}
+  .col.hist-col .card.hist-card{display:none}
+  /* 横向空间不够时改成左图右按钮，否则按钮会被挤到滚动区外 */
+  .emo-body{grid-template-columns:45% 1fr}
+  .emo-body #emoPrev{width:100%}
+  .emo-body .emo-find-wrap{grid-column:1/-1}
+  .emo-copy{display:flex;flex-direction:column;gap:8px;min-width:0}
 }
 </style>
 </head>
 <body>
 
 <header>
-  <span class="brand">voice-ai 调试台</span>
-  <span class="chip-wrap">
-    <button class="chip btn" id="chipBrain" title="点击切换 API（大脑）"><span class="dot"></span>大脑 <b>-</b></button>
-    <div class="menu" id="brainMenu" hidden></div>
-  </span>
-  <span class="chip" id="chipMem"><span class="dot"></span>记忆 <b>-</b></span>
-  <span class="chip" id="chipDevice"><span class="dot"></span>设备 <b>-</b></span>
-  <span class="chip" id="chipFiles"><span class="dot"></span>文件 <b>-</b></span>
-  <span class="chip" id="chipEngine"><span class="dot"></span>引擎 <b>-</b></span>
-  <span class="chip" id="chipCost" title="账本还没读到"><span class="dot"></span>花费 <b>-</b></span>
-  <span class="chip" id="chipUp">运行 <b>-</b></span>
-  <span class="chips">
+  <div class="hrow main">
+    <span class="brand">voice-ai 调试台</span>
+    <span class="chip-wrap">
+      <button class="chip btn" id="chipBrain" title="点击切换 API（大脑）"><span class="dot"></span>大脑 <b>-</b></button>
+      <div class="menu" id="brainMenu" hidden></div>
+    </span>
+    <span class="chip" id="chipMem"><span class="dot"></span>记忆 <b>-</b></span>
+    <span class="chip" id="chipDevice"><span class="dot"></span>设备 <b>-</b></span>
+    <span class="chip" id="chipFiles"><span class="dot"></span>文件 <b>-</b></span>
+    <span class="chip" id="chipEngine"><span class="dot"></span>引擎 <b>-</b></span>
+    <span class="chip" id="chipCost" title="账本还没读到"><span class="dot"></span>花费 <b>-</b></span>
+    <span class="chip" id="chipUp">运行 <b>-</b></span>
+  </div>
+  <div class="hrow acts">
+    <button id="btnBig" class="on" title="放大页面上的字（再点一次关掉）">大字</button>
     <select id="volumeSel" title="放音音量：只调小，板子和页面试听同时生效">
       <option value="30">音量 小</option>
       <option value="50">音量 中</option>
       <option value="70">音量 大</option>
       <option value="100">音量 满</option>
     </select>
+    <button id="btnHistory" title="看最近的对话（含重启前的），每条都能重播">对话</button>
     <button id="btnMem" title="查看五层记忆的实际内容">记忆</button>
     <button id="btnPersona" title="改人设词：你是谁、怎么说话（最多 120 字，下一轮生效）">人设</button>
     <button id="btnSongs" title="看歌单、加歌、删歌（上传后自动转成板子能放的格式）">歌曲</button>
@@ -208,7 +267,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
     <button id="btnStop" class="danger">打断</button>
     <button id="btnRestart" title="重启 bridge：按桌面的 start-bridge.cmd 重新启动，约 1–3 分钟">重启</button>
     <button id="btnQuit" class="danger" title="关掉本机的 bridge（设备随之离线）">关闭</button>
-  </span>
+  </div>
 </header>
 
 <div id="quitScreen" hidden>
@@ -261,7 +320,21 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
   </div>
 
   <div class="col hist-col">
-    <div class="card" style="flex:1">
+    <div class="card" style="flex:none">
+      <h2>表情 <span class="spacer hint" id="emoHint">自动</span></h2>
+      <div class="body emo-body" style="padding:10px">
+        <img id="emoPrev" alt="设备屏幕预览">
+        <div class="emo-copy">
+          <div class="hint" id="emoOffline" hidden></div>
+          <div class="actions" id="emoBtns"></div>
+        </div>
+        <div class="emo-find-wrap">
+          <input id="emoFind" class="emo-find" type="search" placeholder="搜动作…" hidden>
+          <div class="emo-cat" id="emoCat" hidden></div>
+        </div>
+      </div>
+    </div>
+    <div class="card hist-card" style="flex:1">
       <h2>历史 <span class="spacer hint" id="histHint">0 轮</span></h2>
       <div class="body hist" id="histBody" style="padding:4px 0"></div>
     </div>
@@ -295,6 +368,8 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
 /* 这份页面只跟本机 bridge（127.0.0.1:8080）打交道，接口如下：        */
 /*   GET  /api/state    顶栏状态：大脑、记忆、引擎、授权目录、运行时长    */
 /*   GET  /api/turns    轮次 + 日志增量（?since=&log_since=）            */
+/*   GET  /api/history  落盘的最近几轮对话（只允许本机，?limit=）        */
+/*   POST /api/replay   把一句话重新念一遍，只走 TTS（只允许本机）       */
 /*   POST /api/text     打字直通，返回 PCM 流（跳过 ASR）                */
 /*   POST /turn         上传 WAV，返回 PCM 流（走 ASR）                  */
 /*   POST /stop         打断当前一轮                                    */
@@ -306,6 +381,10 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;
 /*   POST /shutdown     一键关闭 bridge（只允许本机）                    */
 /*   POST /restart      一键重启 bridge（只允许本机）                    */
 /*   POST /api/volume   放音音量档位（只允许本机；只调小）               */
+/*   POST /api/screen/emotion  手动换屏幕表情（只允许本机；calm=回自动） */
+/*   GET  /api/screen/frame    当前屏幕画面 JPEG（只允许本机）           */
+/*   GET  /api/screen/catalog  原案 16 组动作清单（只允许本机）          */
+/*   POST /api/screen/anim     播放指定动作（只允许本机）                */
 /*                                                                      */
 /* 鉴权：每个请求带 X-Auth 头。token 在 ~/.deepseek/bridge_token；       */
 /*       从本机打开时由服务端直接注入（见 INJECTED），所以通常不用手填。 */
@@ -2071,6 +2150,182 @@ function renderPersona() {
 }
 
 /* ------------------------------------------------------------------ */
+/* 对话面板：读落盘的历史，每条都能单独重播                            */
+/* ------------------------------------------------------------------ */
+const HIST = { items: [], limit: 60 };
+
+function srcLabel(s) {
+  return s === "device" ? "设备" : s === "text" ? "文字" : (s || "?");
+}
+
+function histTime(at) {
+  // turns.jsonl 里是 2026-10-30T12:34:56；今天的只给时分，往前的带月日
+  const s = String(at || "");
+  if (s.length < 16) return s;
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const today = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  return s.slice(0, 10) === today ? s.slice(11, 16) : s.slice(5, 10) + " " + s.slice(11, 16);
+}
+
+async function showHistory() {
+  try {
+    const res = await api("/api/history?limit=" + HIST.limit);
+    if (res.status === 404) { renderHistoryStale(); return; }
+    const data = await res.json();
+    if (data.error) { toast("读对话失败: " + data.error); return; }
+    HIST.items = data.items || [];
+    renderHistoryPanel();
+  } catch (e) { if (String(e.message) !== "401") toast("读对话失败"); }
+}
+
+function renderHistoryStale() {
+  const body = $("#turnBody");
+  body.innerHTML = "";
+  $("#turnHint").textContent = "对话 · 需要重启";
+  const box = mk("div", "bubble reply");
+  box.appendChild(mk("div", "who", "服务端还是旧代码"));
+  box.appendChild(mk("div", "",
+    "页面里已经有「对话」按钮，但正在跑的 bridge 还不认识 /api/history（返回 404）。"
+    + "点下面的「重启桥」等 1–3 分钟就能看历史对话和重播。已经记录过的轮次不会丢。"));
+  const row = mk("div", "actions");
+  row.style.marginTop = "9px";
+  const btn = mk("button", "", "重启桥");
+  btn.onclick = () => doRestart();
+  row.appendChild(btn);
+  box.appendChild(row);
+  body.appendChild(box);
+}
+
+function renderHistoryPanel() {
+  const body = $("#turnBody");
+  body.innerHTML = "";
+  $("#turnHint").textContent = "对话 · 最近 " + HIST.items.length + " 条";
+
+  const playable = HIST.items.filter((it) => it.reply).length;
+  const head = mk("div", "metrics");
+  const addMetric = (k, v) => {
+    const box = mk("div", "metric");
+    box.appendChild(mk("div", "k", k));
+    box.appendChild(mk("div", "v", String(v)));
+    head.appendChild(box);
+  };
+  addMetric("显示", HIST.items.length);
+  addMetric("可重播", playable);
+  body.appendChild(head);
+
+  const bar = mk("div", "row");
+  bar.style.cssText = "margin:10px 0 6px;align-items:center";
+  const reload = mk("button", "", "刷新");
+  reload.onclick = () => showHistory();
+  const more = mk("button", "", "再多看 60 条");
+  more.disabled = HIST.items.length < HIST.limit || HIST.limit >= 300;
+  more.onclick = () => { HIST.limit = Math.min(HIST.limit + 60, 300); showHistory(); };
+  bar.append(reload, more);
+  const tip = mk("div", "hint", "最新的在最上面。「重播」只重新念这一句：不调大模型、不花钱、不写记忆。");
+  tip.style.marginLeft = "4px";
+  bar.appendChild(tip);
+  body.appendChild(bar);
+
+  if (!HIST.items.length) {
+    body.appendChild(mk("div", "wf-empty", "还没有记录。发一轮文字或对着设备说一句，这里就会出现。"));
+    return;
+  }
+  const list = HIST.items.slice().reverse();
+  for (const it of list) body.appendChild(histRow(it));
+}
+
+function histRow(it) {
+  const box = mk("div", "bubble reply");
+  box.style.marginBottom = "8px";
+  const who = mk("div", "who");
+  who.appendChild(mk("span", "tag " + (it.source || ""), srcLabel(it.source)));
+  if (it.engine) who.appendChild(mk("span", "", engLabel(it.engine)));
+  if (it.error) who.appendChild(mk("span", "tag err", "ERR"));
+  who.appendChild(mk("span", "meta", histTime(it.at)));
+  box.appendChild(who);
+
+  const q = mk("div", "");
+  q.style.fontWeight = "600";
+  q.textContent = it.user ? "你：" + it.user : "（这一轮没有你的话）";
+  box.appendChild(q);
+
+  const a = mk("div", "");
+  a.style.marginTop = "3px";
+  a.textContent = it.reply ? "答：" + it.reply
+    : it.error ? "出错：" + it.error : "（没有回答）";
+  if (!it.reply) a.style.color = "var(--dim)";
+  box.appendChild(a);
+
+  if (it.reply) {
+    const actions = mk("div", "actions");
+    actions.style.cssText = "margin-top:7px;gap:6px";
+    const btn = mk("button", "mini", "重播");
+    btn.onclick = () => replayText(it.reply, btn);
+    actions.appendChild(btn);
+    box.appendChild(actions);
+  }
+  return box;
+}
+
+let _replaying = false;
+async function replayText(text, btn) {
+  // 只重放一句话：同一个合成器，和真实一轮一样走 volume → 浏览器本地播放
+  if (!text) return;
+  if (S.busy) { toast("正在跑一轮，先等它说完"); return; }
+  if (_replaying) { toast("上一条还在念"); return; }
+  _replaying = true;
+  btn.disabled = true;
+  btn.textContent = "合成中…";
+  try {
+    const res = await api("/api/replay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text }),
+    });
+    if (res.status === 404) { toast("服务端还是旧代码，先点「重启」"); return; }
+    if (!res.ok) {
+      toast("重播失败：HTTP " + res.status + " " + (await res.text()).slice(0, 80));
+      return;
+    }
+    const reader = res.body.getReader();
+    const parts = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      total += value.length;
+      btn.textContent = "收 " + (total / BYTES_PER_MS / 1000).toFixed(1) + " s";
+    }
+    if (!total) { toast("没有收到音频"); return; }
+    playPcm(concatBytes(parts, total));
+    const eng = res.headers.get("X-Engine");
+    toast((eng ? engLabel(eng) + " 重播" : "重播") + " · "
+      + (total / BYTES_PER_MS / 1000).toFixed(1) + " s");
+  } catch (e) {
+    if (String(e.message) !== "401") toast("重播失败：" + e.message);
+  } finally {
+    _replaying = false;
+    btn.disabled = false;
+    btn.textContent = "重播";
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 大字模式                                                            */
+/* ------------------------------------------------------------------ */
+function applyBig(on) {
+  document.documentElement.classList.toggle("big", on);
+  const b = $("#btnBig");
+  if (b) {
+    b.classList.toggle("on", on);
+    b.title = on ? "字已经放大；再点一次变小" : "放大页面上的字";
+  }
+  try { localStorage.setItem("voiceConsoleBig", on ? "1" : "0"); } catch (e) {}
+}
+
+/* ------------------------------------------------------------------ */
 /* 启动                                                                */
 /* ------------------------------------------------------------------ */
 async function boot() {
@@ -2094,6 +2349,7 @@ async function boot() {
   }
   $("#gate").classList.remove("on");
   pollUsage();
+  loadCatalog();
   await pollTurns();
   if (S.selected === null && S.turns.length) {
     selectTurn(S.turns[S.turns.length - 1].seq, false);
@@ -2112,7 +2368,10 @@ $("#volumeSel").onchange = setVolume;
 $("#btnMem").onclick = showMemory;
 $("#btnPersona").onclick = showPersona;
 $("#btnSongs").onclick = showSongs;
+$("#btnHistory").onclick = showHistory;
 $("#btnPerm").onclick = showPermissions;
+$("#btnBig").onclick = () => applyBig(!document.documentElement.classList.contains("big"));
+applyBig(document.documentElement.classList.contains("big"));
 $("#chipBrain").onclick = toggleBrainMenu;
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#brainMenu") && !e.target.closest("#chipBrain")) hideBrainMenu();
@@ -2124,11 +2383,175 @@ $("#textInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); }
 });
 
+/* ------------------------------------------------------------------ */
+/* 表情：手动切换 + 屏幕预览                                            */
+/* ------------------------------------------------------------------ */
+// calm 是「回到自动」；其余 key 跟 bridge/screen_hub.py 的 EMOTION_ANIMS 一致
+const EMO_LIST = [["calm", "自动"], ["happy", "开心"], ["excited", "兴奋"],
+                  ["surprised", "惊讶"], ["angry", "生气"], ["sad", "伤心"],
+                  ["shy", "害羞"]];
+// 两种选法共用一份高亮：emoSel 是情绪按钮，animSel 是原案目录里挑的动作
+let emoSel = "calm";
+let animSel = "";
+let emoFetching = false;
+let emoUrl = null;
+
+function emoLabel(key) {
+  const hit = EMO_LIST.find((it) => it[0] === key);
+  return hit ? hit[1] : key;
+}
+
+function paintEmoSelection() {
+  for (const b of document.querySelectorAll("#emoBtns button")) {
+    b.classList.toggle("on", b.dataset.emo === emoSel);
+  }
+  for (const b of document.querySelectorAll("#emoCat button")) {
+    b.classList.toggle("on", animSel !== "" && b.dataset.anim === animSel);
+  }
+}
+
+function renderEmoButtons() {
+  const box = $("#emoBtns");
+  box.innerHTML = "";
+  for (const [key, label] of EMO_LIST) {
+    const b = document.createElement("button");
+    b.className = "mini";
+    b.textContent = label;
+    b.dataset.emo = key;
+    b.onclick = () => pickEmotion(key);
+    box.appendChild(b);
+  }
+  paintEmoSelection();
+}
+
+async function pickEmotion(key) {
+  try {
+    const res = await api("/api/screen/emotion", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emotion: key }),
+    });
+    if (!res.ok) { toast("换表情失败：HTTP " + res.status); return; }
+    emoSel = key;
+    animSel = "";
+    paintEmoSelection();
+    $("#emoHint").textContent = emoLabel(key);
+  } catch (e) {
+    if (String(e.message) !== "401") toast("换表情失败：" + e.message);
+  }
+}
+
+/* 原案 16 组：组名 + 该组动作。同一动作出现在多组时按钮也都认这个动画名。 */
+let catGroups = [];
+let catQuery = "";
+
+function renderCatalog(groups) {
+  const box = $("#emoCat");
+  box.innerHTML = "";
+  const q = catQuery.trim().toLowerCase();
+  let shown = 0;
+  for (const g of groups) {
+    const names = q ? g.anims.filter((n) => n.toLowerCase().includes(q)) : g.anims;
+    if (!names.length) continue;
+    shown += names.length;
+    const wrap = document.createElement("div");
+    wrap.className = "cat-g";
+    const title = document.createElement("div");
+    title.className = "cat-t";
+    title.textContent = g.title;
+    const row = document.createElement("div");
+    row.className = "actions";
+    for (const name of names) {
+      const b = document.createElement("button");
+      b.className = "mini";
+      b.textContent = name;
+      b.dataset.anim = name;
+      b.onclick = () => playAnim(name);
+      row.appendChild(b);
+    }
+    wrap.appendChild(title);
+    wrap.appendChild(row);
+    box.appendChild(wrap);
+  }
+  if (!shown) {
+    const none = document.createElement("div");
+    none.className = "hint";
+    none.textContent = "没有匹配的动作";
+    box.appendChild(none);
+  }
+  box.hidden = false;
+  paintEmoSelection();
+}
+
+async function loadCatalog() {
+  try {
+    const res = await api("/api/screen/catalog");
+    if (!res.ok) return;                // 旧版 bridge 没有这个接口：先不显示
+    const data = await res.json();
+    catGroups = data.groups || [];
+    renderCatalog(catGroups);
+    const find = $("#emoFind");
+    find.hidden = false;
+    find.oninput = () => {
+      catQuery = find.value;
+      renderCatalog(catGroups);
+    };
+  } catch (e) {
+    // 401 由 api() 统一处理；其余错误留空即可
+  }
+}
+
+async function playAnim(name) {
+  try {
+    const res = await api("/api/screen/anim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ anim: name }),
+    });
+    if (!res.ok) { toast("播不了这个动作：HTTP " + res.status); return; }
+    animSel = name;
+    emoSel = "";
+    paintEmoSelection();
+    $("#emoHint").textContent = name;
+  } catch (e) {
+    if (String(e.message) !== "401") toast("播不了这个动作：" + e.message);
+  }
+}
+
+// 4 帧/秒够看清楚动作；标签页在后台或这一拍还没回来就跳过，不排队。
+async function pollEmo() {
+  if (S.quit || emoFetching || document.visibilityState !== "visible") return;
+  emoFetching = true;
+  try {
+    const res = await api("/api/screen/frame");
+    if (!res.ok) {
+      $("#emoOffline").hidden = false;
+      $("#emoOffline").textContent = res.status === 404
+        ? "bridge 还是旧版，重启一次才有表情切换"
+        : "屏幕模块没启动（HTTP " + res.status + "）";
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const img = $("#emoPrev");
+    img.onload = () => { if (emoUrl) URL.revokeObjectURL(emoUrl); emoUrl = url; };
+    img.src = url;
+    $("#emoOffline").hidden = true;
+  } catch (e) {
+    // 网络抖一下没事，下一拍再试
+  } finally {
+    emoFetching = false;
+  }
+}
+
+renderEmoButtons();
+
 loadToken();
 restoreSession();
 boot();
-// 两个轮询：轮次/日志 1.2 s，状态条 4 s。一键关闭时统一清掉，免得刷报错。
-pollTimers = [setInterval(pollTurns, 1200), setInterval(pollState, 4000)];
+// 三个轮询：轮次/日志 1.2 s，状态条 4 s，表情预览 0.25 s。一键关闭时统一清掉，免得刷报错。
+pollTimers = [setInterval(pollTurns, 1200), setInterval(pollState, 4000),
+              setInterval(pollEmo, 250)];
 </script>
 </body>
 </html>

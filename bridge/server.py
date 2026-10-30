@@ -65,6 +65,23 @@ def fmt_ms(value):
     return "-" if value is None else "%6d ms" % value
 
 
+def tail_lines(path, limit, max_bytes=4 * 1024 * 1024):
+    """只读文件末尾若干行：turns.jsonl 会一直长，不能整份读进内存。"""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            start = max(0, size - max_bytes)
+            fh.seek(start)
+            blob = fh.read()
+    except OSError:
+        return []
+    lines = blob.split(b"\n")
+    if start > 0 and lines:
+        lines = lines[1:]   # 从中间切开的那一行可能不完整，丢掉
+    return [ln for ln in lines if ln.strip()][-limit:]
+
+
 def build_report(timers, turn, text=None):
     """把一轮遥测拼成日志行；`report()` 与调试台共用同一份来源。"""
     m = timers.marks
@@ -205,12 +222,12 @@ def stop_memory(bridge):
 
 
 def build_screen():
-    """屏幕推流：默认关闭，改了 SCREEN_ENABLED 才建对象。"""
-    if not screen_config.SCREEN_ENABLED:
-        print("screen: disabled (SCREEN_ENABLED=0)")
-        return None, None
+    """屏幕状态机常驻（调试台预览要用）；给设备推流才是 SCREEN_ENABLED 控制。"""
     lib = screen_hub.AnimLibrary(screen_config.FRAMES_DIR)
     hub = screen_hub.ScreenHub(lib)
+    if not screen_config.SCREEN_ENABLED:
+        print("screen: preview only (SCREEN_ENABLED=0), anims=%d" % len(lib.index))
+        return hub, None
     streamer = screen_http.Streamer(hub)
     streamer.start()
     print("screen: enabled anims=%d fps=%d" % (len(lib.index), screen_config.FPS))
@@ -320,9 +337,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         route = self._route()
         if route not in ("/turn", "/stop", "/brain", "/api/text",
+                         "/api/replay",
                          "/api/memory/fact", "/api/memory/pin",
                          "/api/memory/delete", "/shutdown", "/restart",
-                         "/api/volume", "/screen/key",
+                         "/api/volume", "/screen/key", "/api/screen/emotion",
+                         "/api/screen/anim",
                          "/api/songs", "/api/songs/delete", "/api/persona",
                          "/api/permissions/add", "/api/permissions/toggle",
                          "/api/permissions/remove") or not self._authorized():
@@ -359,6 +378,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(503, b'{"error":"screen disabled"}')
             return screen_http.handle_key(self, self.screen_hub)
 
+        if route == "/api/screen/emotion":
+            return self._handle_screen_emotion(body)
+
+        if route == "/api/screen/anim":
+            return self._handle_screen_anim(body)
+
         if route.startswith("/api/memory/"):
             return self._handle_memory_write(route, body)
 
@@ -368,6 +393,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/text":
             return self._handle_text(body)
+
+        if route == "/api/replay":
+            return self._handle_replay(body)
 
         if route.startswith("/api/songs"):
             return self._handle_songs(route, body)
@@ -686,6 +714,84 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_song(song, source="text")
         return self._stream_turn(Timers(), text, source="text")
 
+    def _handle_screen_emotion(self, body):
+        """调试台手动换表情：calm 是回「自动」，其余必须是已知表情。"""
+        if not self._is_loopback():
+            return self._reply(403, b'{"error":"screen emotion is loopback-only"}')
+        hub = self.screen_hub
+        if hub is None:
+            return self._reply(503, b'{"error":"screen disabled"}')
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            emo = str(payload.get("emotion") or "")
+        except (UnicodeDecodeError, ValueError, AttributeError):
+            return self._reply(400, b'{"error":"bad json"}')
+        if emo == emotion.CALM:
+            hub.show_auto()
+        elif not hub.show_emotion(emo):
+            return self._reply(400, b'{"error":"unknown emotion"}')
+        return self._reply_json(200, {"state": hub.state, "anim": hub.anim,
+                                      "hint": hub.hint})
+
+    def _handle_screen_anim(self, body):
+        """按原案目录里的名字播放任意动作。"""
+        if not self._is_loopback():
+            return self._reply(403, b'{"error":"screen anim is loopback-only"}')
+        hub = self.screen_hub
+        if hub is None:
+            return self._reply(503, b'{"error":"screen disabled"}')
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            name = str(payload.get("anim") or "")
+        except (UnicodeDecodeError, ValueError, AttributeError):
+            return self._reply(400, b'{"error":"bad json"}')
+        if not hub.show_anim(name):
+            return self._reply(400, b'{"error":"unknown anim"}')
+        return self._reply_json(200, {"state": hub.state, "anim": hub.anim,
+                                      "hint": hub.hint})
+
+    def _handle_replay(self, body):
+        """把一句话重新念一遍：只走 TTS，不调大模型、不写记忆、不记账。"""
+        if not self._is_loopback():
+            return self._reply(403, b'{"error":"replay is loopback-only"}')
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            text = str(payload.get("text") or "").strip()
+        except (UnicodeDecodeError, ValueError, AttributeError):
+            return self._reply(400, b'{"error":"bad json"}')
+        if not text:
+            return self._reply(400, b'{"error":"text is required"}')
+        if len(text) > 500:
+            return self._reply(400, b'{"error":"too long"}')
+        tts = getattr(self.bridge, "tts", None)
+        if tts is None:
+            return self._reply(503, b'{"error":"tts disabled"}')
+        try:
+            pcm, info = tts.synthesize(text)
+        except Exception as exc:
+            return self._reply(502, json.dumps(
+                {"error": "%s: %s" % (type(exc).__name__, exc)}).encode("utf-8"))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("X-Voice", "s16le/%d/mono" % config.SAMPLE_RATE)
+        self.send_header("X-Engine", str(info.get("engine") or ""))
+        self.send_header("X-Tts-Ms", str(info.get("tts_ms") or ""))
+        self.end_headers()
+        try:
+            for i in range(0, len(pcm), 16384):
+                self._chunk(playback.apply(pcm[i:i + 16384]))
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            try:
+                self._chunk(b"")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        print("  replay: %d chars via %s in %s ms"
+              % (len(text), info.get("engine"), info.get("tts_ms")))
+        sys.stdout.flush()
+
     def _stream_turn(self, timers, text, source):
         if config.MEMORY_ENABLED:
             turn = self.bridge.begin(
@@ -774,16 +880,34 @@ class Handler(BaseHTTPRequestHandler):
             if self.screen_streamer is None:
                 return self._reply(503, b'{"error":"screen disabled"}', close=True)
             return screen_http.write_stream(self, self.screen_streamer)
-        if route not in ("/api/state", "/api/turns", "/api/memory",
+        if route not in ("/api/state", "/api/turns", "/api/history", "/api/memory",
                          "/api/usage", "/api/songs", "/api/persona",
+                         "/api/screen/frame", "/api/screen/catalog",
                          "/api/permissions", "/api/permissions/dirs"):
             return self._reply(404, b'{"error":"not found"}')
         if not self._authorized():
             return self._reply(401, b'{"error":"bad auth"}', close=True)
+        if route == "/api/screen/frame":
+            if not self._is_loopback():
+                return self._reply(403, b'{"error":"screen frame is loopback-only"}')
+            if self.screen_hub is None:
+                return self._reply(503, b'{"error":"screen disabled"}')
+            return self._reply(200, self.screen_hub.frame_jpeg(), "image/jpeg")
+
+        if route == "/api/screen/catalog":
+            if not self._is_loopback():
+                return self._reply(403, b'{"error":"screen catalog is loopback-only"}')
+            if self.screen_hub is None:
+                return self._reply(503, b'{"error":"screen disabled"}')
+            return self._reply_json(200, {"groups": self.screen_hub.catalog()})
         if route == "/api/state":
             return self._reply_json(200, self._state())
         if route == "/api/turns":
             return self._reply_json(200, self._turns_payload())
+        if route == "/api/history":
+            if not self._is_loopback():
+                return self._reply(403, b'{"error":"history is loopback-only"}')
+            return self._reply_json(200, self._history_payload())
         if route == "/api/usage":
             return self._reply_json(200, usage_report.report())
         if route == "/api/songs":
@@ -900,6 +1024,32 @@ class Handler(BaseHTTPRequestHandler):
         return console_hub.hub().since(self._query_int("since"),
                                        self._query_int("log_since"),
                                        limit=200)
+
+    def _history_payload(self):
+        """调试台「对话」面板：读落盘的 turns.jsonl，重启后也还在。"""
+        limit = min(max(self._query_int("limit", 60), 1), 300)
+        path = getattr(console_hub.hub(), "path", None)
+        items = []
+        if path:
+            for raw in tail_lines(path, limit):
+                try:
+                    t = json.loads(raw.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if not isinstance(t, dict):
+                    continue
+                items.append({
+                    "at": t.get("at"),
+                    "source": t.get("source"),
+                    "session": t.get("session"),
+                    "user": t.get("user") or "",
+                    "reply": t.get("reply") or "",
+                    "error": t.get("error"),
+                    "engine": t.get("engine"),
+                    "first_audio_ms": t.get("first_audio_ms"),
+                    "audio_ms": t.get("audio_ms"),
+                })
+        return {"items": items, "count": len(items), "path": path}
 
     def _memory_payload(self):
         """默认只给计数；`?text=1` 才回原文（个人数据，需主动打开）。"""

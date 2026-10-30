@@ -63,17 +63,85 @@ class ScreenHookTests(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        importlib.reload(cls.sc)          # 别把 SCREEN_ENABLED=1 留给后面的测试
 
     def url(self, path):
         return "http://127.0.0.1:%d%s" % (self.port, path)
 
-    def test_disabled_builds_nothing(self):
+    def test_disabled_builds_no_streamer_but_keeps_preview_hub(self):
         saved = self.sc.SCREEN_ENABLED
         self.sc.SCREEN_ENABLED = False
         try:
-            self.assertEqual(self.server.build_screen(), (None, None))
+            hub, streamer = self.server.build_screen()
+            self.assertIsNone(streamer)
+            self.assertIsNotNone(hub)          # 调试台预览不需要给设备推流
         finally:
             self.sc.SCREEN_ENABLED = saved
+
+    def test_emotion_route_switches_preview(self):
+        hub = self.server.Handler.screen_hub
+        hub.show_auto()
+        r = requests.post(self.url("/api/screen/emotion"), headers={"X-Auth": TOKEN},
+                          json={"emotion": "happy"}, timeout=5)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["state"], "preview")
+        self.assertEqual(hub.anim, self.server.screen_hub.EMOTION_ANIMS["happy"])
+        hub.show_auto()
+
+    def test_emotion_route_calm_returns_to_auto(self):
+        hub = self.server.Handler.screen_hub
+        hub.show_emotion("angry")
+        r = requests.post(self.url("/api/screen/emotion"), headers={"X-Auth": TOKEN},
+                          json={"emotion": "calm"}, timeout=5)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["state"], "idle")
+        self.assertEqual(hub.anim, self.server.screen_hub.BREATHING)
+
+    def test_emotion_route_rejects_unknown(self):
+        r = requests.post(self.url("/api/screen/emotion"), headers={"X-Auth": TOKEN},
+                          json={"emotion": "nonsense"}, timeout=5)
+        self.assertEqual(r.status_code, 400)
+
+    def test_emotion_route_needs_auth(self):
+        r = requests.post(self.url("/api/screen/emotion"),
+                          json={"emotion": "happy"}, timeout=5)
+        self.assertEqual(r.status_code, 401)
+
+    def test_catalog_route_lists_original_groups(self):
+        r = requests.get(self.url("/api/screen/catalog"), headers={"X-Auth": TOKEN},
+                         timeout=10)
+        self.assertEqual(r.status_code, 200)
+        groups = r.json()["groups"]
+        self.assertEqual(len(groups), 16)
+        self.assertEqual(groups[0]["title"], "01-关机或离线")
+        self.assertIn("撸猫", groups[7]["anims"])
+
+    def test_anim_route_plays_named_animation(self):
+        hub = self.server.Handler.screen_hub
+        hub.show_auto()
+        r = requests.post(self.url("/api/screen/anim"), headers={"X-Auth": TOKEN},
+                          json={"anim": "撸猫"}, timeout=5)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["anim"], "撸猫")
+        self.assertEqual(hub.state, "preview")
+        hub.show_auto()
+
+    def test_anim_route_rejects_unknown(self):
+        r = requests.post(self.url("/api/screen/anim"), headers={"X-Auth": TOKEN},
+                          json={"anim": "不存在的动作"}, timeout=5)
+        self.assertEqual(r.status_code, 400)
+
+    def test_anim_route_needs_auth(self):
+        r = requests.post(self.url("/api/screen/anim"),
+                          json={"anim": "撸猫"}, timeout=5)
+        self.assertEqual(r.status_code, 401)
+
+    def test_frame_route_serves_jpeg(self):
+        r = requests.get(self.url("/api/screen/frame"), headers={"X-Auth": TOKEN},
+                         timeout=10)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["Content-Type"], "image/jpeg")
+        self.assertEqual(r.content[:3], b"\xff\xd8\xff")
 
     def test_stream_serves_jpeg_frames(self):
         r = requests.get(self.url("/screen"), headers={"X-Auth": TOKEN},

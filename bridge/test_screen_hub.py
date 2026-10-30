@@ -152,6 +152,68 @@ class HubTests(unittest.TestCase):
         for anim in sh.EMOTION_ANIMS.values():
             self.assertIn(anim, names)
 
+    def test_show_emotion_enters_preview(self):
+        self.assertTrue(self.hub.show_emotion("happy"))
+        self.assertEqual(self.hub.state, "preview")
+        self.assertEqual(self.hub.anim, sh.EMOTION_ANIMS["happy"])
+        self.assertEqual(self.hub.hint, sh.EMOTION_LABELS["happy"])
+
+    def test_show_auto_returns_to_breathing(self):
+        self.hub.show_emotion("angry")
+        self.hub.show_auto()
+        self.assertEqual(self.hub.state, "idle")
+        self.assertEqual(self.hub.anim, sh.BREATHING)
+        self.assertEqual(self.hub.hint, sh.HINT_IDLE)
+
+    def test_preview_is_not_interrupted_by_idle_inserts(self):
+        self.hub.show_emotion("shy")
+        self.clock.t = 1200
+        self.hub.tick()
+        self.assertEqual(self.hub.anim, sh.EMOTION_ANIMS["shy"])
+        self.assertEqual(self.hub.state, "preview")
+
+    def test_key_leaves_preview(self):
+        self.hub.show_emotion("sad")
+        self.hub.on_key()
+        self.assertEqual(self.hub.state, "recording")
+
+    def test_show_unknown_emotion_falls_back_to_auto(self):
+        self.assertFalse(self.hub.show_emotion("nonsense"))
+        self.assertEqual(self.hub.state, "idle")
+        self.assertEqual(self.hub.anim, sh.BREATHING)
+
+    def test_show_anim_plays_named_animation(self):
+        self.assertTrue(self.hub.show_anim("撸猫"))
+        self.assertEqual(self.hub.state, "preview")
+        self.assertEqual(self.hub.anim, "撸猫")
+        self.assertEqual(self.hub.hint, "撸猫")
+
+    def test_show_anim_plays_animation_from_expanded_set(self):
+        # 2026-10-30 帧库从 25 段扩到 106 段，原来没进目录的也要能播
+        self.assertTrue(self.hub.show_anim("吃饺子"))
+        self.assertEqual(self.hub.anim, "吃饺子")
+        self.assertEqual(self.hub.hint, "吃饺子")
+
+    def test_show_anim_rejects_unknown_name(self):
+        self.assertFalse(self.hub.show_anim("不存在的动作"))
+        self.assertEqual(self.hub.state, "idle")
+
+    def test_catalog_matches_original_16_groups(self):
+        self.assertEqual(len(sh.CATALOG), 16)
+        self.assertEqual(sh.CATALOG[0][0], "01-关机或离线")
+        self.assertEqual(sh.CATALOG[15][0], "16-按键反应")
+
+    def test_catalog_covers_every_animation_in_library(self):
+        import json
+        with open("screen_frames/index.json", encoding="utf-8") as fh:
+            names = set(json.load(fh))
+        listed = {name for _, anims in sh.CATALOG for name in anims}
+        self.assertEqual(listed, names)
+
+    def test_labels_cover_every_emotion(self):
+        for emo in sh.EMOTION_ANIMS:
+            self.assertIn(emo, sh.EMOTION_LABELS)
+
     def test_turn_end_leaves_emotion_anim(self):
         self.hub.turn_begin()
         self.hub.first_audio(emotion="happy")
